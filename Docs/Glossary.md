@@ -135,6 +135,26 @@ separate elementary streams (video here, audio there). The step *before* decode.
 **Container** — a format that packages multiple streams plus metadata (MP4, MKV,
 MPEG-TS). Handled by the same FFmpeg library as protocol handling.
 
+**Elementary stream** — the raw codec bitstream itself (NAL units, frame
+sequence, parameter sets), independent of how it's delivered or stored.
+*Identical whether it's packetized into RTP for live delivery or wrapped in an
+MP4 container on disk* — only the demuxing step differs, never the codec-level
+structure. This is the precise term for what people usually mean by "an H.264
+stream" or "an H.265 stream."
+
+**"Stream" — three different meanings, easy to conflate:**
+1. **Streaming** (verb/adjective) — live, incremental network delivery, as
+   opposed to downloading a complete file first.
+2. **A stream** (e.g. "Stream #0:0: Video...") — one track within a session or
+   file, when more than one might exist. Used identically by `ffprobe` whether
+   reading a live RTSP session or a file on disk — nothing to do with live vs.
+   recorded.
+3. **Elementary stream** — see above.
+
+A recorded MP4 has multiple *streams* (sense 2), each one an *elementary
+stream* (sense 3), wrapped in a container — independent of whether it was ever
+*streamed* (sense 1) over a network at all.
+
 **Substream / main stream** — most IP cameras publish the same scene at two or
 more qualities on different URLs: a high-res main stream and a lower-res
 substream. *A substream is often the cheaper spike target.*
