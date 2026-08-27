@@ -62,8 +62,21 @@ Full rationale in [Docs/Architecture.md §12](Docs/Architecture.md). Summary:
 **Technical**
 - UE **5.3**. Win64 only. Linux / Android / Quest deferred.
 - One stream, one texture. Multi-stream deferred.
-- Test source: one LAN IP camera — **HEVC / H.265, 1920×1080, 25 fps**, PCM
-  A-law audio. Audio is permanently out of scope for Phase 1.
+- Test source: one LAN IP camera exposing two RTSP streams. **Phase 1 targets
+  the secondary stream — HEVC, 1280×720, 25 fps, GOP = 50 frames / 2.0s,
+  admin-editable and measured clean.** The primary stream (1920×1080) runs a
+  proprietary adaptive-codec feature ("InstaStream") with an unpredictable,
+  non-adjustable ~8s GOP — deferred, not abandoned; see
+  [Docs/Architecture.md §3](Docs/Architecture.md) and
+  [Docs/TestSource.md](Docs/TestSource.md) for the full measurement.
+- **This camera is shared** — accessed through an NVR with at least one other
+  active user. **Do not reconfigure camera-side settings** (resolution,
+  bitrate, GOP, disabling InstaStream, etc.) **without explicitly raising it
+  first**, in any milestone, even ones that seem to only need a temporary
+  change. Testing 1080p later requires disabling InstaStream on a shared
+  device — that is a deliberate, discussed decision each time, not a default.
+- PCM A-law audio present on both streams; permanently out of scope for
+  Phase 1.
 - Public repository, so licensing is a hard constraint, not a preference. See D3.
 
 **Scope discipline**
@@ -129,6 +142,31 @@ this project — but do not insist if he wants (b).
 |---|---|---|
 | **Free rein** | `.md`, anything under `Docs/`, other documentation | No need to ask |
 | **Must ask** | `.cpp`, `.h`, `.cs` (incl. `.Build.cs`, `.Target.cs`), `.uplugin`, `.ini`, `.bat` / `.ps1`, anything under `Content/` | Ask every time |
+
+### Model per phase
+
+Project state lives **on disk** (`CLAUDE.md`, `Docs/Architecture.md`,
+`Docs/Glossary.md`, the session log), not in a conversation's context. Switching
+models therefore costs nothing — any model reads four files and is current. Pick
+per task rather than committing to one for the project.
+
+| Work | Model | Why |
+|---|---|---|
+| Concept prep (Blocks A–E), glossary, docs, devlog drafting | **Sonnet** | Explanation-heavy, high-volume, well-established material. Faster, which matters across many long teaching sessions. |
+| Routine implementation once the concepts are settled | **Sonnet** | Known shape, known API, reasoning already done. |
+| **M1 debugging** — delay-load failures, unresolved externals against FFmpeg import libs, editor-works-packaged-fails | **Opus** | Diagnose-from-thin-evidence problems; this is the class where the depth gap shows. |
+| **M4 lifecycle** — shutdown deadlocks against blocking network reads | **Opus** | Subtle, timing-dependent races that are easy to "fix" in a way that only relocates them. |
+| Reopening an architectural decision, or a licensing edge case | **Opus** | Should be rare — D1–D12 are settled — but these are expensive to get wrong. |
+
+**Caveat that applies to every model.** UE 5.3's Media Framework is a relatively
+obscure API surface. Exact signatures — `IMediaTextureSample`'s contract,
+`FMediaSamples`, which sub-interfaces `IMediaPlayer` exposes **in 5.3
+specifically** — are more prone to confident confabulation than mainstream APIs.
+
+**Read the engine headers on disk before asserting a signature.** Start from
+`Engine/Source/Runtime/Media/Public/` and
+`Engine/Source/Runtime/MediaUtils/Public/`. Recall is not evidence. This applies
+to Opus as much as to Sonnet; it simply matters more the smaller the model.
 
 ### Measurement and narrative
 

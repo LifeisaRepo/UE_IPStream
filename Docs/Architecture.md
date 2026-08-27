@@ -58,13 +58,42 @@ does not have to be re-made at 11pm on a Saturday.
 
 ## 3. Test source
 
-| Property | Value |
-|---|---|
-| Transport | RTSP over LAN |
-| Video codec | HEVC / H.265 (MPEG-H Part 2) |
-| Resolution | 1920×1080 |
-| Frame rate | 25 fps |
-| Audio codec | PCM A-law (ignored — see non-goals) |
+The camera exposes two RTSP streams. **Phase 1 targets the secondary stream.**
+
+| Property | Secondary (Phase 1 target) | Primary (deferred) |
+|---|---|---|
+| Transport | RTSP over LAN | RTSP over LAN |
+| Video codec | HEVC / H.265 | HEVC / H.265 + "InstaStream" |
+| Resolution | 1280×720 | 1920×1080 |
+| Frame rate | 25 fps | 25 fps |
+| GOP | **50 frames / 2.0s, measured, admin-editable** | ~8.0–8.1s, measured, **not editable while InstaStream is active** |
+| Audio codec | PCM A-law (ignored — see non-goals) | PCM A-law (ignored) |
+
+### Why the secondary stream, not the primary
+
+Both were measured directly against the real camera in Session 1 (full data in
+[TestSource.md](TestSource.md)). The primary stream runs a proprietary
+adaptive-codec feature the camera's firmware labels "InstaStream," which
+manages its GOP internally, unpredictably, and outside admin control — measured
+at ~8 seconds, not adjustable while the feature is active. The secondary stream
+does not run it, exposes a normal editable "I Frame Interval" field, and
+measured GOP matches that field's value almost exactly (50 frames / 2.0s across
+14 consecutive gaps, essentially zero drift).
+
+This is a **materially better number for the deliverable**, not just a spike
+convenience: worst-case join latency drops from ~8s to ~2s, which also softens
+the reconnect-freeze concern flagged for M4. It also gives the project a real,
+admin-controllable GOP knob — an axis for a measured-improvement comparison
+later (D11), which the primary stream cannot offer since InstaStream owns that
+decision.
+
+**The primary stream is not abandoned, only deferred.** Disabling InstaStream on
+the camera restores manual control of its I-frame interval, which would make a
+1080p Phase-2-or-later comparison possible. **Not done now: this camera is
+shared via an NVR with at least one other active user, and reconfiguring it is
+not a one-person decision.** See [CLAUDE.md](../CLAUDE.md) — this constraint
+applies to any future milestone that touches camera-side configuration, not just
+this decision.
 
 ### HEVC consequences
 
@@ -374,10 +403,22 @@ subsequent debugging session.
 
 ### M1 — Week 1: THE SPIKE (go / no-go)
 
-> **From a fresh clone, in a UE 5.3 editor, one Blueprint node given the camera's
-> RTSP URL puts a recognisable live image from that camera onto a plane in the
-> level within 10 seconds — and stopping PIE returns control to the editor
-> immediately, with no hang and no crash.**
+> **From a fresh clone, in a UE 5.3 editor, one Blueprint node given the
+> secondary stream's RTSP URL puts a recognisable live image from that camera
+> onto a plane in the level within 8 seconds — and stopping PIE returns control
+> to the editor immediately, with no hang and no crash.**
+
+**8 seconds, revised down from a provisional 15.** The 15-second figure was
+calibrated against the *primary* stream's ~8-second GOP, before Session 1
+discovered that stream runs a proprietary adaptive-codec feature
+("InstaStream") with an unpredictable, non-adjustable GOP. **Phase 1 targets
+the secondary stream instead** (§3) — its GOP measures a clean, admin-
+controlled 50 frames / 2.0 seconds, confirmed consistent across 14 I-frame
+intervals in a 30-second capture. Worst-case GOP wait is therefore ~2 seconds;
+8 seconds gives roughly 4× margin over that for RTSP handshake, decode startup,
+and texture upload — a meaningful bar (if it's taking 8+ seconds, something is
+likely actually wrong) without being so tight that ordinary timing jitter reads
+as a false failure.
 
 Clean shutdown is folded into the pass criterion deliberately. A spike that
 renders a frame but hangs the editor on exit has not proven viability — it has

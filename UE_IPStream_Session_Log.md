@@ -22,28 +22,43 @@ recent entries for detail.
 
 **As of:** 2026-08-22 (Session 1)
 **Phase:** 1 — RTSP ingest
-**Status:** Architecture agreed and documented. No code written. Nothing scaffolded.
+**Status:** M0 substantially complete (education + real measurement, in
+parallel). No code written. Nothing scaffolded.
 
-**Next action:** **concept prep, not execution.** Sanjyot has asked to begin with
-education. Cover the M0/M1 concept set — video coding fundamentals, FFmpeg's
-library layout, Unreal's build system and module model — before running tooling
-or writing code.
+**Next action:** continue concept prep toward M1 (FFmpeg's library layout,
+Unreal's build system and module model), then start the repo-prep work —
+`.gitignore` / `.gitattributes` fix ([Architecture §9](Docs/Architecture.md))
+plus a plugin skeleton that compiles and loads with no FFmpeg calls in it.
 
-**Then:** M0 — prove the camera stream with `ffprobe` / `ffplay` outside Unreal,
-using the FFmpeg build that will ship. Owned by Sanjyot; needs the camera.
+**M0 findings — see [Docs/TestSource.md](Docs/TestSource.md) for full detail:**
+- Main stream: HEVC Main, 1920×1080, 25fps, `yuv420p(tv)`. Substream: HEVC,
+  1280×720, 25fps — deprioritized as an M1 target (see below).
+- 0 B-frames across 746 captured frames — confirmed low-latency encoder config.
+- I-frame vs P-frame size: 260–269 KB vs 400 B–1 KB, a measured 270–670×.
+- **GOP measured at ~8.0–8.1 seconds (~200 frames)** — a hard floor on
+  worst-case join latency, independent of any Unreal-side code.
+- **The camera's own admin UI claims a 2-second I-frame interval, locked/
+  uneditable, on both streams. This is measurably wrong** — real GOP is ~4×
+  that. Root cause undetermined (leading hypothesis: NVR-managed channel
+  override, given `channel=2` in the URL); deliberately not investigated
+  further — logged as a time-boxed non-blocking open item, not chased, per the
+  project's own scope-discipline rule.
+- **M1 pass-criterion timeout revised 10s → 15s** in `Architecture.md`, to keep
+  real margin over the measured (not guessed) worst case.
+- Substream: same codec family, lower res, identical locked "2s" UI value, no
+  independent GOP measurement taken. Not pursued as an M1 target — resolution
+  alone isn't a meaningful risk-reducer, and codec choice never was (see
+  Session 1's H.264 correction, below).
 
-**Then:** repo prep — `.gitignore` / `.gitattributes` fix
-([Architecture §9](Docs/Architecture.md)) plus a plugin skeleton that compiles
-and loads with no FFmpeg calls in it.
+**Open items remaining:**
+1. Parameter set delivery (in-band vs SDP-only) — not directly tested; soft
+   signal (clean decode with no special flags) suggests it's a non-issue.
+   Revisit only on a mysterious decode failure.
+2. Does the pinned FFmpeg build include libsrt? (`ffmpeg -protocols`) — still
+   open, applies at FFmpeg-pin time, not yet reached.
 
-**Open items** (all resolved by M0, none blocking):
-1. Does the camera expose a substream? If yes, M1 targets it and HEVC moves to M2.
-2. Camera GOP length — bounds first-frame latency and therefore the "10 seconds"
-   in the M1 pass criterion.
-3. Does the pinned FFmpeg build include libsrt? (`ffmpeg -protocols`) Determines
-   whether Phase 2 needs an FFmpeg rebuild.
-
-**Milestone position:** M0 not started.
+**Milestone position:** M0 done, including a real stream-selection decision.
+M1 not started.
 
 ---
 
@@ -165,9 +180,6 @@ Sanjyot to run M0. Offered in parallel: the `.gitignore` fix and a
 no-FFmpeg-calls plugin skeleton, so that any breakage in M1 is unambiguously
 FFmpeg's fault. Not yet started.
 
-**Loose end:** a numbered request from Sanjyot began at item 2 — item 1 was never
-stated and has not been captured anywhere.
-
 ### Working agreement revised — same session, after CLAUDE.md was first written
 
 Sanjyot rejected the initial *Working style* brief. The correction, and it is a
@@ -206,3 +218,162 @@ where the relevance isn't self-evident.
 **Note for future sessions:** the glossary is the retroactive payment of jargon
 debt from Session 1. Keep it current — the rule is that no unexplained acronym
 survives a message.
+
+### Block A — video coding fundamentals (concept prep)
+
+Covered, in order: why video compression exists (uncompressed 1080p25 ≈ 1.24
+Gbps vs. camera's actual ~2-8 Mbps); spatial vs. temporal redundancy; I/P/B
+frame types and why B-frames force decode/display reorder (PTS vs DTS); GOP as
+the direct consequence of P-frame chaining, and why GOP length is a hard floor
+on stream-join latency; NAL units as the actual on-wire unit; SPS/PPS/VPS
+parameter sets and why a decoder is completely non-functional without them, not
+merely degraded; codec vs. container vs. protocol as three genuinely separate
+concerns; RTSP (control-only, carries no video) vs. RTP (carries media) vs. SDP
+(session description, sometimes carries parameter sets) vs. IDR/non-IDR/CRA as
+the axis answering "is this a safe join point" — separate from the I/P/B axis
+answering "how is this predicted."
+
+Sanjyot asked a follow-up on IDR vs. non-IDR slices specifically — answered in
+full, including the HEVC-specific CRA/RASL wrinkle (a plausible cause of a
+single corrupted frame right at stream-join time). This produced a genuine
+correction to the glossary's earlier phrasing, noted there.
+
+### M0 executed live, alongside Block A
+
+Sanjyot ran `ffprobe` twice against the real camera (5s and 30s captures) and
+shared the output. Findings summarized in the Current State block above and
+written up fully in `Docs/TestSource.md`. Two console-encoding artifacts hit
+along the way, both worked around rather than blocking: PowerShell console
+padding stripped real newlines from the first capture (parsed via pattern
+extraction instead of line-based reading); the second capture came out as
+UTF-16 (converted via `Get-Content -Encoding Unicode | Set-Content -Encoding
+utf8` before parsing). Neither is a project concern — just Windows console
+redirection behavior worth remembering if it recurs.
+
+**Correction made mid-session:** Session 1's original architecture discussion
+suggested the substream might "materially de-risk" M1 by being H.264 rather
+than HEVC. Sanjyot correctly pushed back — asked what the actual benefit was.
+On inspection, the claim didn't hold: FFmpeg's decode API (`avcodec_send_packet`
+/ `avcodec_receive_frame`) is codec-agnostic, so H.264 vs. HEVC makes zero
+difference to the spike's code path. The real, corrected reasoning: a substream
+only helps if it has a **shorter GOP or lower resolution**, and codec identity
+was never the actual variable. Recorded here so it isn't silently re-asserted
+later — this is exactly the kind of "why this and not the alternative"
+challenge the working agreement asks for, and it worked as intended.
+
+**The headline finding:** measured GOP (~8.0–8.1s, three consistent I-frame
+gaps) directly contradicts the camera admin UI's claimed 2-second I-frame
+interval — a 4× mismatch, confirmed not a measurement artifact (a true 2s GOP
+over 30s would show ~15 I-frames; only 4 were observed). The UI field is
+greyed out on both main and substream, showing the identical wrong value —
+weak evidence the override is device-wide (most likely an NVR-managed channel,
+given `channel=2` in the URL) rather than a per-stream display bug, though the
+root cause was deliberately left uninvestigated past a quick mental check, in
+line with the project's own scope-discipline rule.
+
+**Decisions made from this data:**
+- M1 pass-criterion timeout revised **10s → 15s** in `Architecture.md`, now
+  backed by a real measurement instead of a guess.
+- Substream deprioritized as an M1 target — no evidence it differs meaningfully
+  from the main stream now that codec identity is known not to matter.
+- GOP-mismatch root cause **not pursued further** — logged as a non-blocking
+  open item rather than chased, an explicit scope-discipline call.
+- **New design note for M4** (not an M0/M1 action): reconnect logic will hit
+  this same ~8s wait on every reconnection. Whether to freeze the last good
+  frame during that wait instead of showing black is a real UX decision for the
+  "live monitor" demo, not just a spike-timing detail. Logged now so it isn't
+  rediscovered from scratch at M4.
+
+**Files updated this session (beyond the working-agreement changes above):**
+`Docs/TestSource.md` (new), `Docs/Architecture.md` (M1 criterion revised, with
+the reasoning inline), this file.
+
+### The GOP mystery resolves — root cause found, stream decision made
+
+Immediate correction to the above: the "camera admin UI" checked for the
+8s-vs-2s discrepancy was actually the **NVR's** UI, not the camera's own —
+Sanjyot flagged this mistake himself. Its "2 seconds, locked" reading turned
+out to be a red herring regardless of source.
+
+**Checking the camera's own UI directly found the real cause.** The primary
+stream (`subtype=0`) runs a proprietary feature the firmware labels
+**"InstaStream"** — likely this vendor's branded name for the adaptive/smart-
+codec mode hypothesized earlier. With it active, "I Frame Interval" is disabled
+entirely; GOP is managed internally, measured at the earlier ~8.0–8.1s, not
+admin-adjustable. **The secondary stream (`subtype=1`) does not run
+InstaStream** and exposes a normal editable field defaulting to **`50`**
+(frames).
+
+Sanjyot ran a 30-second `ffprobe` capture against the secondary stream and
+reported 15 I-frames; verified independently rather than taken on trust — 15×I,
+734×P, 0×B across 749 frames, 14 consecutive I-frame gaps averaging exactly
+50.1 frames (2.007s), matching the UI field almost exactly. Genuinely the
+cleanest measurement this project has produced — effectively zero drift.
+1280×720, HEVC, no InstaStream. I-frame ~143–154 KB vs. P-frame ~1–3.5 KB,
+confirming the intra/inter size gap at a second, independent resolution.
+
+**Decision: Phase 1 targets the secondary stream, not the primary.** Sanjyot
+confirmed. Reasoning, all recorded in `Architecture.md` §3:
+
+1. Worst-case join latency drops from the primary's ~8s to ~2s — a materially
+   better number for the deliverable's own latency section, and it directly
+   softens the M4 reconnect-freeze concern.
+2. The I-frame interval is a real, admin-editable knob on this stream —
+   something the primary stream can never offer, since InstaStream owns that
+   decision. Gives a concrete axis for a later measured-improvement comparison
+   (try 50 vs. 25 vs. 12 frames, measure join latency at each) — directly
+   serves the devlog narrative Sanjyot asked for in the original brief.
+3. 720p plausibly fits the game-context framing better than crisp 1080p would
+   — reads more like an in-universe security feed than broadcast video.
+
+**M1 pass criterion revised again: 15s → 8s.** The 15s figure was calibrated
+against the primary stream's ~8s worst case; now that Phase 1 targets the
+secondary stream's ~2s worst case, 8s gives roughly 4× margin — tight enough to
+still mean something as a bar, loose enough not to fail on ordinary jitter.
+
+**New standing constraint, added to `CLAUDE.md`'s Active Constraints:** this
+camera is shared via an NVR with at least one other active user. **No
+camera-side reconfiguration — resolution, bitrate, GOP, disabling
+InstaStream — without explicitly raising it first, in any future milestone.**
+Sanjyot was explicit: testing the primary/1080p stream later is possible by
+disabling InstaStream, but deliberately not done now because of this. This is a
+durable project constraint, not a one-off note — a future session must not
+casually suggest touching camera config to "just check something."
+
+**Primary stream status: deferred, not abandoned.** Documented as a real,
+available option in `Architecture.md` §3 for whenever the shared-access
+constraint is explicitly renegotiated.
+
+**Files updated:** `Docs/TestSource.md`, `Docs/Architecture.md` (§3 rewritten
+as a two-stream comparison; M1 criterion revised again), `CLAUDE.md` (new
+shared-camera constraint), this file.
+
+### Repo and workflow decisions — end of Session 1
+
+**Git flow: straight to `main`.** Solo repo, no collaborators, no CI. Branch-per-
+milestone and PR-per-milestone were both considered and rejected as ceremony that
+buys nothing here; a portfolio reviewer reads commit history, not the branch
+graph.
+
+**Commit `995b216`** — the four documentation files. `main` is ahead of
+`origin/main` by one; **not pushed yet**, pending a decision on whether the design
+doc should be public before M1's go/no-go resolves.
+
+**Model per phase.** Recorded as a table in `CLAUDE.md`. Short version: Sonnet for
+concept prep, docs, and routine implementation; Opus for M1 debugging, M4
+lifecycle work, and any reopening of architecture or licensing. The
+documentation-first setup is what makes switching free — state is on disk, not in
+a conversation.
+
+Attached caveat, applying to every model: **UE 5.3 Media Framework signatures must
+be verified against engine headers on disk, not recalled.** That API surface is
+obscure enough to invite confident confabulation. Start at
+`Engine/Source/Runtime/Media/Public/` and
+`Engine/Source/Runtime/MediaUtils/Public/`.
+
+**Future task logged:** git reported LF→CRLF conversion on all four files.
+Harmless for Markdown, but before any `.cpp`/`.h` lands, `.gitattributes` needs
+line-ending normalisation for source files — otherwise a later Linux port
+produces diffs in which every line appears changed. Not done, because
+`.gitattributes` is not a `.md` file and the code-delivery rule requires asking
+first.
