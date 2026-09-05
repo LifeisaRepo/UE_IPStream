@@ -25,10 +25,19 @@ recent entries for detail.
 **Status:** M0 substantially complete (education + real measurement, in
 parallel). No code written. Nothing scaffolded.
 
-**Next action:** continue concept prep toward M1 (FFmpeg's library layout,
-Unreal's build system and module model), then start the repo-prep work —
-`.gitignore` / `.gitattributes` fix ([Architecture §9](Docs/Architecture.md))
-plus a plugin skeleton that compiles and loads with no FFmpeg calls in it.
+**RESOLVED 2026-09-05: credential exposure on the public GitHub repo.**
+`output.txt`, committed in `1713393` ("M0 Testing", tip of `main`) and live on
+`origin/main` (confirmed public) since 2026-08-27, contained the camera's RTSP
+URL with plaintext credentials (`rtsp://admin:***@192.168.0.131:...` — real
+password redacted here deliberately; see below for why that redaction matters
+even after rotation). **Password has been rotated, and git history has been
+cleaned** — full write-up below.
+
+**Next action once the above is resolved:** continue concept prep toward M1
+(FFmpeg's library layout, Unreal's build system and module model), then start
+the repo-prep work — `.gitignore` / `.gitattributes` fix
+([Architecture §9](Docs/Architecture.md)) plus a plugin skeleton that compiles
+and loads with no FFmpeg calls in it.
 
 **M0 findings — see [Docs/TestSource.md](Docs/TestSource.md) for full detail:**
 - Main stream: HEVC Main, 1920×1080, 25fps, `yuv420p(tv)`. Substream: HEVC,

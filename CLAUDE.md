@@ -79,6 +79,22 @@ Full rationale in [Docs/Architecture.md §12](Docs/Architecture.md). Summary:
   Phase 1.
 - Public repository, so licensing is a hard constraint, not a preference. See D3.
 
+**Secrets and credentials — hard rule, learned from an actual incident (see
+session log, 2026-09-05):**
+- The camera's RTSP URL contains embedded credentials
+  (`rtsp://user:pass@host/...`). **Never write the full URL, in plaintext, into
+  any file that gets committed** — docs, scratch captures, code comments, none
+  of it. `Docs/TestSource.md`'s convention — `rtsp://admin:***@192.168.0.131:...`
+  — is the pattern to follow everywhere.
+- **Raw diagnostic captures (`ffprobe`/`ffplay`/future FFmpeg debug output) are
+  local-only, never committed.** They routinely open with the full connection
+  URL. Summarize and redact findings into `Docs/` instead — that's the
+  permanent artifact; the raw capture is disposable once its numbers are
+  extracted. `.gitignore` blocks `output*.txt` for this reason.
+- Before any commit that includes new files, actively check for the raw
+  credential pattern, not just trust that redaction happened — this is exactly
+  how it slipped through once already.
+
 **Scope discipline**
 - Scope creep is the single most likely cause of failure on this project.
   **Push back when scope widens.** The non-goals list in
