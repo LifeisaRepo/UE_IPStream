@@ -20,10 +20,11 @@ recent entries for detail.
 
 ## Current state
 
-**As of:** 2026-09-05 (Session 2)
+**As of:** 2026-09-06 (Session 2, continued)
 **Phase:** 1 — RTSP ingest
-**Status:** M0 complete. Blocks A and B complete. No code written. Nothing
-scaffolded.
+**Status:** M0 complete. Blocks A and B complete. Repo-prep complete — UE
+project created, plugin skeleton compiles and loads correctly. M1 (the spike)
+not yet started.
 
 **RESOLVED 2026-09-05: credential exposure on the public GitHub repo.**
 `output.txt`, committed in `1713393` ("M0 Testing", tip of `main`) and live on
@@ -33,15 +34,9 @@ password redacted here deliberately; see below for why that redaction matters
 even after rotation). **Password has been rotated, and git history has been
 cleaned** — full write-up below.
 
-**Next action:** Blocks A and B both complete (Session 2). Concept curriculum
-(Blocks A–E, mapped to milestones) is recorded at
-[Architecture.md §10](Docs/Architecture.md); Block C (Media Framework) isn't
-due until M2. Immediate next step is the repo-prep work that sits between
-Block B and M1 — `.gitignore` / `.gitattributes` fix
-([Architecture §9](Docs/Architecture.md)) plus a plugin skeleton that compiles
-and loads with no FFmpeg calls in it. This touches `.gitignore`/
-`.gitattributes`/`.uplugin`/`.Build.cs` — code-delivery files, so the (a)
-chat-vs-(b)-direct-write question applies before any of it is written.
+**Next action:** repo-prep is done (see below) — next is M1 itself, the
+throwaway spike (D8). Concept prep for it (Block B) is complete; Block C
+(Media Framework) isn't due until M2.
 
 **M0 findings — see [Docs/TestSource.md](Docs/TestSource.md) for full detail:**
 - Main stream: HEVC Main, 1920×1080, 25fps, `yuv420p(tv)`. Substream: HEVC,
@@ -495,10 +490,119 @@ what each interface is for, before M2) is not yet due; the next concept-prep
 item is actually the repo-prep step that sits between Block B and M1 — the
 `.gitignore`/`.gitattributes` fix and a no-FFmpeg-calls plugin skeleton.
 
+### Repo-prep executed and reviewed
+
+Sanjyot completed the three repo-prep items from Block B's follow-on, content
+delivered in chat (option (a)) for him to type/apply directly:
+
+1. **`.gitignore` fix** — applied with one deliberate change from what was
+   given: generalized `!Plugins/IPStreamMedia/ThirdParty/**/*.{dll,lib}` to
+   `!Plugins/**/ThirdParty/**/*.{dll,lib}`, removing the hardcoded plugin name
+   from infrastructure that doesn't need it. Reviewed — correct, no conflict
+   with the existing `Plugins/**/Binaries/*` rule (different, unrelated path).
+2. **`.gitattributes` fix** — `*.dll`/`*.lib` added to LFS tracking, exactly as
+   specified.
+3. **UE project creation.** Hit the expected wizard limitation — Unreal's New
+   Project flow always nests under `<Location>/<ProjectName>/` and won't
+   target an already-populated folder directly. Worked around by creating in a
+   scratch folder (Blank, C++, no starter content) named **`IPStreamMediaDemo`**
+   — chosen to name the demo harness after the plugin it hosts, read as
+   engineering rather than broadcast-flavored, and stay short given FFmpeg's
+   own deep header tree plus Windows' path-length limit — then moving
+   `.uproject`/`Source/`/`Config`/`Content/` into the existing repo root and
+   letting `Binaries`/`Intermediate`/`Saved` regenerate in place. No nested
+   `.git` created (source control was left unchecked in the wizard).
+
+Both `.gitignore`/`.gitattributes` changes were committed by Sanjyot
+independently (`d0fd929`, "Git updates before Project Init") — outside this
+session's own edit flow, confirmed via `git log`/`git show --stat` afterward
+rather than assumed.
+
+**Plugin skeleton created, built, and verified.** Both module startup log
+lines appeared in the Output Log in the correct order, confirming the
+`PostConfigInit`/`Default` loading-phase split actually works, not merely that
+the `.uplugin` JSON parses. Files reviewed line-by-line against what was
+specified in chat:
+
+- Structurally exact match: two-module split, loading phases, dependency
+  scoping (public vs. private) all correct. No functional issues.
+- **One real, good deviation:** dedicated log categories from the start
+  instead of the suggested `LogTemp` placeholder — and via two different,
+  both-individually-correct mechanisms. `IPStreamMedia` uses
+  `DECLARE_LOG_CATEGORY_EXTERN` (header) + `DEFINE_LOG_CATEGORY` (`.cpp`),
+  giving external linkage appropriate for a module that Architecture §5 says
+  will grow multiple `.cpp` files (`Decoder/`, `Player/`, `Samples/`) all
+  logging to the same category. `IPStreamMediaFactory` uses
+  `DEFINE_LOG_CATEGORY_STATIC` — internal linkage, correct because that module
+  is genuinely one file. **Confirmed deliberate.** Sanjyot chose `_STATIC` for the factory
+  specifically because it's a one-file module — drawing on his own 2025
+  devlog research into custom Unreal log categories — and reasoned each
+  module's log-category linkage independently rather than copying one pattern
+  everywhere. Real, stated "why this and not the alternative," exactly per the
+  working agreement.
+- Cosmetic-only, left as-is by agreement: Epic's copyright boilerplate present
+  on two of six files but not the other four; tabs vs. spaces between the two
+  `.Build.cs` files; a trailing semicolon after one `IMPLEMENT_MODULE(...)`
+  call but not the other. None affect correctness; not worth a special trip
+  back into these files.
+
+**Repo-prep is now fully complete.** Per the curriculum, next is M1 itself —
+the throwaway spike (D8) — not further concept prep; Block C (Media Framework)
+isn't due until M2.
+
+### Licensing gap closed: `LICENSE.md` added, copyright headers applied
+
+Reviewing the Epic boilerplate comment surfaced a real gap: D5 has always
+stated the plugin's own code is MIT, but no `LICENSE.md` existed anywhere in
+the repo — nothing on disk backed the claim for a public-repo reviewer.
+Closed this session:
+
+- **`LICENSE.md`** created at the repo root — standard MIT text, copyright
+  Sanjyot Dahale, with a closing note pointing at FFmpeg's own
+  `COPYING.LGPLv2.1`/`NOTICE.md` for third-party terms once M1 adds them.
+- **Copyright header applied to all five actual source files** (`.Build.cs`
+  ×2, `.h`, `.cpp` ×2) — `// Copyright (c) 2026 Sanjyot Dahale. Licensed
+  under the MIT License — see LICENSE.md.`, replacing Epic's leftover
+  boilerplate on the two files that had it. This also resolves the earlier
+  cosmetic inconsistency (only 2 of 6 files carrying any header).
+- **`IPStreamMedia.uplugin` deliberately left untouched.** JSON has no native
+  comment syntax; a `"_comment"` pseudo-key was tried and reverted rather than
+  risk introducing an unrecognized field into a manifest UBT actually parses
+  strictly enough to matter for plugin loading. Not worth the risk for a
+  cosmetic addition — the root `LICENSE.md` already covers this file too.
+  Written by Claude directly, with Sanjyot's explicit authorization (option
+  (b)) for this specific change.
+
+**Follow-up, same session:** Sanjyot asked whether the note appended after the
+`---` divider in `LICENSE.md` (scoping the MIT grant to the plugin's own code,
+pointing at FFmpeg's separate LGPL terms) was intentional. Confirmed yes — but
+flagged a real trade-off not raised at write time: GitHub's automatic license
+detection wants a close match against the standard MIT text, and appended
+prose risks the repo not auto-displaying as "MIT licensed," a real cost for a
+portfolio repo. Offered to move the note into a `## License` section in
+`README.md` instead (which M6 already designates as the home for licensing
+notes) and strip `LICENSE.md` back to pure standard text. **Sanjyot declined —
+build succeeds, files look correct, leaving `LICENSE.md` as-is for now.**
+Recorded so this isn't silently "fixed" by a future session without knowing
+it was a deliberate call, not an oversight.
+
+**Final follow-up, same session:** Sanjyot also applied the same copyright
+header to the demo project's own `Source/IPStreamMediaDemo/` files (the
+wizard-generated primary game module — `.Build.cs`, two `.Target.cs`, `.h`,
+`.cpp`). Confirmed fine — comment-only, zero build risk, and normal practice
+to license your own copy of project scaffolding the same as the rest of the
+repo. This did make `LICENSE.md`'s scoping note stale (it said "this plugin's
+own source code," narrower than reality now that the header spans plugin and
+demo project both) — fixed by changing "plugin's" to "repository's" in that
+note.
+
 ### Files updated this session
 
 `Docs/Glossary.md` (§8 GPL/LGPL entries rewritten in plain language; §5
 Unreal build system expanded with public/private dependency names, the
-explicit delay-load window mechanism, `StagedFileType.NonUFS`, and
-`UnrealTargetPlatform`), `Docs/Architecture.md` (§10 concept curriculum table
-added), `CLAUDE.md` (Current status corrected), this file.
+explicit delay-load window mechanism, `StagedFileType.NonUFS`,
+`UnrealTargetPlatform`, and generated-project-files regeneration behavior),
+`Docs/Architecture.md` (§10 concept curriculum table added), `CLAUDE.md`
+(Current status corrected, then updated again to reflect repo-prep completion
+and M1 as next action), `LICENSE.md` (new), five plugin source files
+(copyright headers), this file.

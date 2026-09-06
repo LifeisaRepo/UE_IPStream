@@ -24,17 +24,18 @@ third-party native integration skill.
   **Blocks A and B both done** (video coding fundamentals; FFmpeg's architecture
   + Unreal's build system and module model). Block C (Media Framework) isn't
   due until M2.
-- **Next action:** repo-prep — the `.gitignore`/`.gitattributes` fix and a
-  plugin skeleton that compiles and loads with no FFmpeg calls in it
-  ([Architecture §9](Docs/Architecture.md)). This is the first work in the
-  project touching code-delivery files (`.gitignore`, `.gitattributes`,
-  `.uplugin`, `.Build.cs`) — the (a)-chat-vs-(b)-direct-write question applies.
-  See *How we work together* below.
-- **Then: M0** — prove the camera stream with `ffprobe` / `ffplay` outside
-  Unreal, using the FFmpeg build that will ship. Owned by Sanjyot; needs the
-  camera.
-- **Then: repo prep** — `.gitignore` / `.gitattributes` fix (Architecture §9) and
-  the plugin skeleton that compiles and loads with no FFmpeg calls in it.
+- **Repo-prep complete.** `.gitignore`/`.gitattributes` fixed (committed
+  `d0fd929`). UE project `IPStreamMediaDemo` created at the repo root; the
+  `IPStreamMedia`/`IPStreamMediaFactory` plugin skeleton exists, compiles, and
+  both modules confirmed logging on startup in the correct order
+  (`PostConfigInit` factory, then default-phase runtime) — reviewed against
+  spec, no functional issues.
+- **Next action: M1 — the spike.** FFmpeg External module (`ThirdParty/FFmpeg`
+  `.Build.cs`), demux, decode, CPU swscale to BGRA, one Blueprint node. Concept
+  prep for this (Block B) is already done. See
+  [Architecture.md §10](Docs/Architecture.md) for the pass criterion (8s,
+  clean shutdown) and in/out-of-scope list. This is code-delivery work — the
+  (a)-chat-vs-(b)-direct-write question applies to every file.
 - Phase 1 = RTSP only. SRT is Phase 2, RTMP is Phase 3.
 
 ## Key decisions made so far
