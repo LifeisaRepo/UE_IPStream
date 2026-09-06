@@ -78,4 +78,4 @@ DerivedDataCache/*
 
 # Diagnostic captures (ffprobe/ffplay/etc.) - may contain credentials
 # embedded in stream URLs. Never commit; summarize findings into Docs/ instead.
-output*.txt
+M0Dumps/output*.txt
