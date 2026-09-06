@@ -19,10 +19,17 @@ third-party native integration skill.
 
 - Full design lives in [Docs/Architecture.md](Docs/Architecture.md) — module
   layout, Media Framework contract, threading, licensing, milestones M0–M6.
-- **Next action: concept prep, not execution.** Sanjyot has asked to start with
-  education. Cover the M0/M1 concept set — video coding fundamentals, FFmpeg's
-  library layout, Unreal's build system and module model — before any tooling is
-  run or code is written. See *How we work together* below.
+- **Concept prep delivered as five blocks (A–E)**, each front-loading the
+  milestone it precedes. Canonical table: [Docs/Architecture.md §10](Docs/Architecture.md).
+  **Blocks A and B both done** (video coding fundamentals; FFmpeg's architecture
+  + Unreal's build system and module model). Block C (Media Framework) isn't
+  due until M2.
+- **Next action:** repo-prep — the `.gitignore`/`.gitattributes` fix and a
+  plugin skeleton that compiles and loads with no FFmpeg calls in it
+  ([Architecture §9](Docs/Architecture.md)). This is the first work in the
+  project touching code-delivery files (`.gitignore`, `.gitattributes`,
+  `.uplugin`, `.Build.cs`) — the (a)-chat-vs-(b)-direct-write question applies.
+  See *How we work together* below.
 - **Then: M0** — prove the camera stream with `ffprobe` / `ffplay` outside
   Unreal, using the FFmpeg build that will ship. Owned by Sanjyot; needs the
   camera.

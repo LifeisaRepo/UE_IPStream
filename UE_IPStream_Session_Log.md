@@ -20,10 +20,10 @@ recent entries for detail.
 
 ## Current state
 
-**As of:** 2026-08-22 (Session 1)
+**As of:** 2026-09-05 (Session 2)
 **Phase:** 1 — RTSP ingest
-**Status:** M0 substantially complete (education + real measurement, in
-parallel). No code written. Nothing scaffolded.
+**Status:** M0 complete. Blocks A and B complete. No code written. Nothing
+scaffolded.
 
 **RESOLVED 2026-09-05: credential exposure on the public GitHub repo.**
 `output.txt`, committed in `1713393` ("M0 Testing", tip of `main`) and live on
@@ -33,11 +33,15 @@ password redacted here deliberately; see below for why that redaction matters
 even after rotation). **Password has been rotated, and git history has been
 cleaned** — full write-up below.
 
-**Next action once the above is resolved:** continue concept prep toward M1
-(FFmpeg's library layout, Unreal's build system and module model), then start
-the repo-prep work — `.gitignore` / `.gitattributes` fix
+**Next action:** Blocks A and B both complete (Session 2). Concept curriculum
+(Blocks A–E, mapped to milestones) is recorded at
+[Architecture.md §10](Docs/Architecture.md); Block C (Media Framework) isn't
+due until M2. Immediate next step is the repo-prep work that sits between
+Block B and M1 — `.gitignore` / `.gitattributes` fix
 ([Architecture §9](Docs/Architecture.md)) plus a plugin skeleton that compiles
-and loads with no FFmpeg calls in it.
+and loads with no FFmpeg calls in it. This touches `.gitignore`/
+`.gitattributes`/`.uplugin`/`.Build.cs` — code-delivery files, so the (a)
+chat-vs-(b)-direct-write question applies before any of it is written.
 
 **M0 findings — see [Docs/TestSource.md](Docs/TestSource.md) for full detail:**
 - Main stream: HEVC Main, 1920×1080, 25fps, `yuv420p(tv)`. Substream: HEVC,
@@ -386,3 +390,115 @@ line-ending normalisation for source files — otherwise a later Linux port
 produces diffs in which every line appears changed. Not done, because
 `.gitattributes` is not a `.md` file and the code-delivery rule requires asking
 first.
+
+---
+
+## Session 2 — 2026-09-05
+
+**Type:** Concept prep (Block B, part 1). No code.
+
+### Block B started: FFmpeg's architecture
+
+Covered: FFmpeg as project vs CLI tools vs libraries, and why M0's `ffprobe`/
+`ffplay` results prove the stream is decodable but not that our own code will
+decode it correctly; the six-library dependency graph (avutil at the base;
+avcodec, avformat, swscale used, with avfilter/avdevice/postproc explicitly
+excluded and why); the packet→frame data flow mapped onto our actual pipeline
+and onto the threading seam already decided (avformat's blocking
+`av_read_frame` vs avcodec's CPU-bound decode); the "shared" vs "dev" Windows
+distribution split; ABI version pinning and why the version suffix in
+`avcodec-60.dll` is load-bearing; and a recap of the LGPL compliance argument
+(D3) grounded in which specific libraries we link.
+
+Follow-up: GPL vs LGPL re-explained in plain language on request (no legal
+phrasing) and the glossary entries in
+[Docs/Glossary.md §8](Docs/Glossary.md) rewritten to match — same content, the
+"why it matters here" note tied explicitly to D3.
+
+**Not yet covered — still pending before M1:** Unreal's build system and
+module model (UBT, modules, `.Build.cs`, DLL loading and staging). This is
+still part of Block B, not a separate block — corrected below.
+
+### Curriculum recovered from an unpersisted prior conversation
+
+Sanjyot surfaced a screenshot from an earlier chat containing a five-block
+concept curriculum (Blocks A–E, each mapped to the milestone it precedes) that
+had never been written to any file in this repo. This is exactly the failure
+mode the project's documentation-first model exists to prevent — a decision
+made in conversation but not persisted is invisible to the next session, this
+one included. It produced a real error worth recording: this session initially
+treated "FFmpeg's library layout" and "Unreal's build system" as two separate
+blocks (B and C) when starting Block B teaching, guessing at boundaries CLAUDE.md's
+prose only implied. The recovered table shows they are **one block (B)**, and
+Block C is actually Media Framework (before M2) — not reached for a while yet.
+
+**Corrected and now the durable record:** [Architecture.md §10](Docs/Architecture.md),
+new "Concept curriculum" subsection — the full A–E table, Block A's exit-test
+definition (read your own `ffprobe` output and account for every line,
+including open items — satisfied by Session 1/M0), and current status (A done,
+B in progress).
+
+**`CLAUDE.md`'s Current status section updated to match** — points at the
+Architecture.md table as canonical rather than re-stating the curriculum
+inline, to avoid a second copy drifting out of sync.
+
+### Loose ends from that prior conversation — one resolved, two still open
+
+The recovered screenshot also flagged two loose ends from that same
+unpersisted discussion, checked against current repo state this session:
+
+1. **"Those five files are still untracked in git" — checked, already
+   resolved.** `git status --ignored` confirms `output.txt`, `output2.txt`,
+   `output2_utf8.txt`, `output3.txt`, `output3_utf8.txt` are all correctly
+   matched by the `output*.txt` rule added to `.gitignore` during the
+   2026-09-05 credential-exposure remediation (commit `74e8df5`). Not at risk
+   of a repeat commit. No action needed.
+2. **"Item 1 from your earlier numbered list is still unstated"** — reference
+   to a numbered list from that same prior, unpersisted conversation. **Closed,
+   no action.** Sanjyot confirmed this was a mistaken reference on his end;
+   nothing to recover.
+3. **Whether the never-write-code-without-asking rule should move to the
+   global `~/.claude/CLAUDE.md`** so it applies to all projects, not just this
+   one. **Closed, no action.** Sanjyot declined — rule stays scoped to this
+   project's `CLAUDE.md` only.
+
+**Separately, still not fixed (Session 1 finding, unrelated to the above):**
+the `.gitignore` trap — `*.dll`, `*.lib`, `Plugins/**/Binaries/*` would
+silently swallow FFmpeg's ThirdParty binaries once they're added. Confirmed
+still present in `.gitignore` this session. Not urgent yet — no FFmpeg
+binaries exist in the repo — but must be fixed as part of repo-prep, before
+the plugin skeleton is scaffolded.
+
+### Block B finished: Unreal's build system and module model
+
+Covered: why UBT exists as a layer above MSVC at all (C#-configured,
+cross-platform, generated project files); the module as unit of
+compilation/linkage and `.Build.cs` as its manifest; `PublicDependencyModuleNames`
+vs `PrivateDependencyModuleNames` and why it's what lets the runtime and
+factory modules carry different dependency lists; `ModuleType.External` and
+why FFmpeg's binary-integration logic is isolated in its own `.Build.cs`
+rather than folded into the runtime module's; the two-phase import-lib/DLL
+story and why delay loading is load-bearing, not a nicety, given DLLs ship
+inside the plugin's own folder rather than requiring a system install (D4)
+— including the alternative that lost, hand-rolled `LoadLibrary`/
+`GetProcAddress` shimming, rejected as strictly more code for no benefit;
+`RuntimeDependencies` / UFS vs `StagedFileType.NonUFS` and why editor-mode DLL
+loading working proves nothing about a packaged build (the `.pak` UFS
+archive has no concept of a loadable DLL file) — grounding why M5 is a real
+milestone, not a formality; `.uplugin` loading phases and why the factory
+module loads at `PostConfigInit` while the runtime module loads later; and
+platform guarding via `UnrealTargetPlatform.Win64` from the first commit.
+
+**Block B is now complete** (both halves: FFmpeg's architecture, and Unreal's
+build system/module model). Per the curriculum, Block C (Media Framework —
+what each interface is for, before M2) is not yet due; the next concept-prep
+item is actually the repo-prep step that sits between Block B and M1 — the
+`.gitignore`/`.gitattributes` fix and a no-FFmpeg-calls plugin skeleton.
+
+### Files updated this session
+
+`Docs/Glossary.md` (§8 GPL/LGPL entries rewritten in plain language; §5
+Unreal build system expanded with public/private dependency names, the
+explicit delay-load window mechanism, `StagedFileType.NonUFS`, and
+`UnrealTargetPlatform`), `Docs/Architecture.md` (§10 concept curriculum table
+added), `CLAUDE.md` (Current status corrected), this file.
