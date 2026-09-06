@@ -380,6 +380,32 @@ This is why a packaged build is a milestone (M5) rather than a final step.
 Eight weekends, evenings and weekends only. One milestone is explicitly marked
 cuttable as schedule insurance.
 
+### Concept curriculum (Blocks A–E)
+
+Each milestone is front-loaded by a concept-prep block — no code until the
+underlying ideas are in place, per the *concept prep precedes each milestone*
+rule in `CLAUDE.md`. This table was defined in an earlier discussion that
+hadn't yet been written to disk; recovered and recorded here so it doesn't
+depend on a specific conversation's memory again.
+
+| Block | Before | Covers |
+|---|---|---|
+| A | M0 | Video coding fundamentals — how a stream becomes frames. Codecs, GOP, NAL units, parameter sets, RTSP vs RTP vs SDP, why demux and decode are separate steps. |
+| B | M1 | FFmpeg's architecture (four libraries, the packet→frame loop) + Unreal's build system (UBT, modules, `.Build.cs`, DLL loading and staging). |
+| C | M2 | Media Framework — what each interface is for, and why the engine is shaped this way. |
+| D | M3 | Colour, pixel formats, and GPU conversion. |
+| E | M4–M5 | Threading, lifecycle, and measurement methodology. |
+
+**Block A's exit test:** read your own `ffprobe` output and be able to account
+for every line of it, including open items — learn, then immediately apply to
+real hardware. Satisfied during Session 1: [Docs/TestSource.md](TestSource.md)
+records the accounted-for output, including the InstaStream/GOP investigation
+that came out of it.
+
+**Status:** Block A done. **Block B in progress** — FFmpeg's architecture
+covered; Unreal's build system (UBT, modules, `.Build.cs`, DLL loading and
+staging) still pending, next before M1 begins.
+
 ### M0 — one evening, before week 1: prove the stream outside Unreal
 
 **Definition of done:** `ffprobe` and `ffplay`, using **the exact FFmpeg build

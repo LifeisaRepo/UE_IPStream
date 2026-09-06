@@ -231,8 +231,28 @@ MSVC and decides what compiles, with which flags, linked against what. Configure
 in **C#**, not in Visual Studio project files. Project files are generated
 output, not source.
 
+**Generated project files (`.sln` / `.vcxproj` / `.vcxproj.filters`)** —
+produced by UBT scanning every `.Build.cs`/`.uplugin`/`.uproject` plus the
+actual source tree (triggered by "Generate Visual Studio project files", or
+automatically by the editor). `.sln` is the solution you open; `.vcxproj`
+holds the real compiler settings (include paths, defines, file list);
+`.vcxproj.filters` is cosmetic Solution-Explorer grouping only. **UBT
+overwrites these from scratch on every regeneration — it does not merge.**
+Hand-editing one (e.g. adding an include path via the VS GUI) works until the
+next regen, then is silently gone with no diff to show it happened. *Why it
+matters here:* the fix for an unresolved FFmpeg include/lib/DLL is always in
+`.Build.cs`, never in the IDE's project settings dialog.
+
 **Module** — Unreal's unit of compilation and linkage; roughly one DLL. Every
 module has a `.Build.cs` describing its dependencies.
+
+**`PublicDependencyModuleNames` vs `PrivateDependencyModuleNames`** — a public
+dependency's include paths and symbols are re-exported to anything that
+depends on *your* module; a private one stops at your module's own boundary.
+*Why it matters here:* it's why the runtime module (`IPStreamMedia`) and the
+factory module (`IPStreamMediaFactory`) can carry different dependency lists —
+FFmpeg is a private dependency of the runtime module only, so nothing that
+merely links against the plugin needs to know FFmpeg exists.
 
 **`.Build.cs`** — the C# file declaring a module: include paths, dependencies,
 libraries to link, files to stage. *This is where third-party integration lives
@@ -252,13 +272,21 @@ runs. Delay loading defers it until first use, so **you** can control when and
 from where it loads — which is what lets a plugin ship DLLs in its own folder
 rather than requiring them on the system PATH.
 
+**`FPlatformProcess::PushDllDirectory` / `GetDllHandle`** — the code that
+actually uses the window delay loading opens up: called from module startup,
+*before* any FFmpeg function is first invoked, to point the loader at the
+plugin's own `Binaries` folder. Without delay loading there is no such window —
+the crash from a missing DLL happens before this code could ever run.
+
 **`RuntimeDependencies`** — tells UBT "this file must be copied into packaged
 builds." A DLL that works in the editor and is missing from a packaged build has
 almost always been left out of this list.
 
 **UFS vs NonUFS** — UFS files go inside Unreal's packed `.pak` archive; NonUFS
-files stay as loose files on disk. **A DLL must be NonUFS**, because Windows can
-only load a DLL from a real file.
+files stay as loose files on disk. **A DLL must be NonUFS**
+(`StagedFileType.NonUFS` in `RuntimeDependencies.Add(...)`), because a native
+DLL loader needs a real file handle on real disk — it has no concept of a
+`.pak` archive at all.
 
 **Loading phase** — when a module is loaded during startup.
 **`PostConfigInit`** is very early, right after config files are read.
@@ -268,6 +296,13 @@ the heavier runtime module loads later.
 
 **`.uplugin`** — the plugin's JSON manifest: name, modules, loading phases,
 platform list.
+
+**`UnrealTargetPlatform`** — the enum `.Build.cs` checks (e.g.
+`UnrealTargetPlatform.Win64`) to guard platform-specific logic. *Why it matters
+here:* all FFmpeg linkage is wrapped in a Win64 check from the first commit,
+even though Win64 is the only Phase 1 target — costs nothing now, turns a
+future Linux port into filling in another branch rather than removing
+hardcoded assumptions.
 
 **Editor build vs packaged build** — different linking, different file layout,
 different staging. **Working in one proves nothing about the other.** This is why
@@ -364,14 +399,20 @@ Complying with one says nothing about the other.
 
 **MIT** — permissive. Do what you like, keep the notice. *This plugin's own code.*
 
-**GPL** — **copyleft, and viral.** Link GPL code into your program and your
-program must also be GPL, as must — arguably — anything linking yours. Fatal for
-an Unreal plugin.
+**GPL** — if your code touches GPL code at all, your *whole program* has to
+become GPL too: full source given away, free to modify and redistribute. It
+spreads to whatever it touches. Fatal for an Unreal plugin, which is why FFmpeg
+must never be built with `--enable-gpl`.
 
-**LGPL** — the "library" variant. Not viral in the same way: your code stays under
-your own licence, provided a user can **substitute their own build of the
-library**. *Dynamic linking satisfies that automatically; static linking does
-not.* Hence D3.
+**LGPL** — same family, but with one exception carved out for linking: you can
+link an LGPL library into your own program and your program stays under
+whatever licence you want. The only real condition is that if you ship the
+LGPL library as a separate file, the user has to be able to swap that file for
+their own version. *A `.dll` is already a separate, swappable file — so
+shipping FFmpeg as dynamic DLLs satisfies that condition automatically, at zero
+extra effort. Static linking bakes the library into your binary with nothing
+left to swap, so it would require extra work — or fail the condition outright.
+This is the entire reasoning behind D3.*
 
 **MPL 2.0** — file-level copyleft. Changes to MPL files must be shared; your own
 files are unaffected. *libsrt is MPL, which is friendly for Phase 2.*
