@@ -24,5 +24,5 @@ SOFTWARE.
 
 This license covers this repository's own source code only. Third-party
 components carry their own licenses — see
-`Plugins/IPStreamMedia/ThirdParty/FFmpeg/COPYING.LGPLv2.1` and the
-accompanying `NOTICE.md` once FFmpeg is integrated (M1).
+`Plugins/IPStreamMedia/ThirdParty/FFmpeg/COPYING.LGPLv3` and the
+accompanying `NOTICE.md`.

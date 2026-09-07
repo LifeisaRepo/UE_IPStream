@@ -118,13 +118,21 @@ responsibility.
 
 ### The rule
 
-**FFmpeg, LGPL 2.1, shared DLLs, dynamically linked. Never static. Never
+**FFmpeg, LGPL, shared DLLs, dynamically linked. Never static. Never
 `--enable-gpl`.**
 
 ### Why, in plain terms
 
 FFmpeg ships under **LGPL 2.1** by default. Passing `--enable-gpl` at configure
-time makes the entire build **GPL**.
+time makes the entire build **GPL**, regardless of version. A third, separate
+flag, `--enable-version3`, upgrades the *LGPL* (not GPL) build from 2.1 to
+**LGPL v3** — this is independent of `--enable-gpl` and easy to miss because
+the name doesn't mention "GPL" at all. **The pinned build for this project
+(see `ThirdParty/FFmpeg/NOTICE.md`) has `--enable-version3` set and
+`--enable-gpl` unset, confirmed both from its configure line and by reading
+its bundled `LICENSE.txt` directly — it is LGPL v3, not the FFmpeg default of
+2.1.** Doesn't change the reasoning below at all; only which exact license
+text gets bundled and cited.
 
 - **GPL is viral.** Linking GPL code into this plugin would force the plugin to
   be GPL, and arguably anything linking the plugin too. For an Unreal plugin that
@@ -147,7 +155,9 @@ native `h264` and `hevc` decoders are LGPL. The GPL flag is never needed.
    publishes `win64-lgpl-shared` releases with MSVC-usable import libraries.
    **Pin an exact release tag.**
 2. Ship the DLLs **unmodified**.
-3. `ThirdParty/FFmpeg/COPYING.LGPLv2.1` — the licence text, verbatim.
+3. `ThirdParty/FFmpeg/COPYING.LGPLv3` — the licence text, verbatim, matching
+   whatever version the pinned build actually reports (check its own
+   `LICENSE.txt`, don't assume 2.1).
 4. `ThirdParty/FFmpeg/NOTICE.md` — exact version, the full configure line (from
    `ffmpeg -buildconf`), and the source URL.
 5. **This plugin's own code is MIT.** LGPL does not infect it, because the
@@ -167,6 +177,11 @@ hides most of SRT's statistics and tuning surface (RTT, loss, buffer levels,
 caller/listener configuration). Phase 2 may want to link libsrt directly to
 expose that telemetry. **Not decided now.** The FFmpeg path is the cheap version
 and there is a legitimate reason to reject it later.
+
+**Checked 2026-09-08, on the pinned build (see `ThirdParty/FFmpeg/NOTICE.md`):**
+`ffmpeg -protocols` lists `srt` under both Input and Output — **libsrt is
+present.** The cheap Phase 2 path above is confirmed available; the
+counterpoint above still applies and the choice is still not made.
 
 ### Why binaries are committed rather than fetched by a script
 
@@ -207,7 +222,7 @@ Plugins/IPStreamMedia/
       include/          # libavcodec/ libavformat/ libavutil/ libswscale/
       lib/Win64/        # import libraries
       bin/Win64/        # runtime DLLs
-      COPYING.LGPLv2.1
+      COPYING.LGPLv3
       NOTICE.md
       FFmpeg.Build.cs   # ModuleType.External
   Content/              # demo material + MediaTexture. Minimal.
@@ -574,5 +589,16 @@ All three resolved by M0 — none blocks starting.
       moves to M2.
 - [ ] **Camera GOP length.** Bounds first-frame latency, and therefore the "10
       seconds" in the M1 pass criterion. Adjust that number before committing.
-- [ ] **Does the pinned FFmpeg build include libsrt?** (`ffmpeg -protocols`)
-      Determines whether Phase 2 needs an FFmpeg rebuild.
+- [x] **Does the pinned FFmpeg build include libsrt?** (`ffmpeg -protocols`)
+      **Resolved 2026-09-08 — yes.** See §4's "do this at pin time" note and
+      `ThirdParty/FFmpeg/NOTICE.md`.
+
+**New, opened 2026-09-08:**
+
+- [ ] **Audit the ~40 other third-party libraries statically built into the
+      pinned FFmpeg DLLs** (`libsrt`, `gmp`, `libssh`, `sdl2`, `libaom`, etc.
+      — full list in the pinned build's configure line, `NOTICE.md`). Only
+      FFmpeg's own LGPL status has been reviewed so far. Not blocking Phase 1
+      — this plugin never calls any of them directly — but a real gap before
+      the licensing story is fully audited, on a project where "public repo,
+      licensing is a hard constraint" is a stated active constraint.
