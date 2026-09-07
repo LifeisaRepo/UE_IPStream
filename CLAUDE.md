@@ -46,7 +46,7 @@ Full rationale in [Docs/Architecture.md §12](Docs/Architecture.md). Summary:
 |---|---|
 | D1 | RTSP first; SRT Phase 2; RTMP Phase 3 |
 | D2 | Proper Media Framework player, not a bespoke API |
-| D3 | FFmpeg, LGPL 2.1, **shared DLLs, dynamic linking. Never static, never `--enable-gpl`** |
+| D3 | FFmpeg, LGPL (pinned build is v3, not the default 2.1 — see Architecture §4), **shared DLLs, dynamic linking. Never static, never `--enable-gpl`** |
 | D4 | Third-party binaries committed via Git LFS, not fetched by a setup script |
 | D5 | Plugin's own code is MIT |
 | D6 | Two modules: runtime (`IPStreamMedia`) + factory (`IPStreamMediaFactory`) |

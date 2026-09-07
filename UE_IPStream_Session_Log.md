@@ -20,11 +20,13 @@ recent entries for detail.
 
 ## Current state
 
-**As of:** 2026-09-06 (Session 2, continued)
+**As of:** 2026-09-08 (Session 3)
 **Phase:** 1 — RTSP ingest
-**Status:** M0 complete. Blocks A and B complete. Repo-prep complete — UE
-project created, plugin skeleton compiles and loads correctly. M1 (the spike)
-not yet started.
+**Status:** M0 complete. Blocks A and B complete. Repo-prep complete. FFmpeg
+build pinned (`N-126455-gecc7eb519e-20260907`, **LGPL v3** — corrected from an
+assumed 2.1, see below) and placed in
+`Plugins/IPStreamMedia/ThirdParty/FFmpeg/`. M1 (the spike) not yet started —
+next real coding session.
 
 **RESOLVED 2026-09-05: credential exposure on the public GitHub repo.**
 `output.txt`, committed in `1713393` ("M0 Testing", tip of `main`) and live on
@@ -606,3 +608,104 @@ explicit delay-load window mechanism, `StagedFileType.NonUFS`,
 (Current status corrected, then updated again to reflect repo-prep completion
 and M1 as next action), `LICENSE.md` (new), five plugin source files
 (copyright headers), this file.
+
+---
+
+## Session 3 — 2026-09-08
+
+**Type:** M1 prerequisite — pinning the FFmpeg build. Short session (~30 min
+Pomodoro), no code. No camera involved.
+
+### FFmpeg build pinned
+
+Sanjyot downloaded `ffmpeg-N-126455-gecc7eb519e-win64-lgpl-shared` from
+[BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases) (the
+`win64-lgpl-shared` variant, per Architecture §4's compliance checklist) and
+laid it out at `Plugins/IPStreamMedia/ThirdParty/FFmpeg/` matching the
+`include/` / `lib/Win64/` / `bin/Win64/` structure from Architecture §5.
+Ran `ffmpeg -buildconf` and `ffmpeg -protocols` from the build's `bin/`
+folder and shared the output for review.
+
+### Correction: the pinned build is LGPL v3, not LGPL 2.1
+
+Every doc in this repo (`CLAUDE.md` D3, Architecture §4, `LICENSE.md`) stated
+"LGPL 2.1" — a reasonable assumption since that's FFmpeg's un-configured
+default, but wrong for this specific build. The configure line shows
+`--enable-version3` set (a flag independent of, and easy to conflate with,
+`--enable-gpl` — the name doesn't mention GPL at all) with `--enable-gpl`
+absent. Confirmed with hard evidence, not just the flag name: read the
+build's own bundled `LICENSE.txt` directly — its header reads "GNU LESSER
+GENERAL PUBLIC LICENSE, Version 3, 29 June 2007."
+
+**Does not change D3's actual reasoning** — dynamic linking satisfies
+LGPL's substitution condition identically under v2.1 or v3. What changes is
+paperwork only: the exact license text to bundle, and every doc reference to
+"2.1." Fixed this session:
+
+- `Plugins/IPStreamMedia/ThirdParty/FFmpeg/COPYING.LGPLv3` — the build's
+  actual `LICENSE.txt`, copied verbatim (byte-for-byte file copy, not
+  retyped, to avoid any risk of transcription error in a legal text).
+- `CLAUDE.md` (D3 table row), `Docs/Architecture.md` (§4 rule statement, "why
+  in plain terms" section expanded to explain the `--enable-version3` axis,
+  compliance checklist item 3, §5 tree diagram), `LICENSE.md` (FFmpeg
+  reference) — all changed from "LGPL 2.1" / `COPYING.LGPLv2.1` to reflect
+  v3. Session 1's original entry recording D3 (2026-08-22, above) was
+  deliberately left as-is rather than rewritten — it's a historical record
+  of the reasoning at the time, not a live spec; this entry is the
+  correction on record instead.
+
+**Also resolved — Architecture §4's "do this at pin time" open item:**
+`ffmpeg -protocols` lists `srt` under both Input and Output. **libsrt is
+present in this build.** Per the doc's own conditional, Phase 2 SRT can
+likely reuse the same `avformat` path rather than needing a from-scratch
+integration or an FFmpeg rebuild — which approach Phase 2 actually takes is
+still not decided (FFmpeg's libsrt wrapper hides most of SRT's telemetry
+surface, a real reason to reject it later), but the option is now confirmed
+available rather than assumed.
+
+### `NOTICE.md` written
+
+`Plugins/IPStreamMedia/ThirdParty/FFmpeg/NOTICE.md` created per Architecture
+§4 compliance checklist item 4 — exact version (`N-126455-gecc7eb519e-20260907`,
+git commit `ecc7eb519e`, built 2026-09-07), full `ffmpeg -buildconf` output,
+the corrected LGPL v3 finding, the libsrt confirmation, and the linked
+library version list. Noted that BtbN publishes on every FFmpeg master push
+rather than periodic version tags, so the git commit hash and build date —
+not a semantic version number — are what make this pin reproducible.
+
+**Open, low priority:** the exact BtbN release-page URL/tag for this build
+wasn't captured, only the asset filename (which does uniquely identify the
+git commit and date). Fine for now; revisit only if exact reproducibility is
+ever actually needed (e.g. rebuilding from source later).
+
+### Follow-up: `NOTICE.md`'s audience, and a real gap it surfaced
+
+Sanjyot asked who `NOTICE.md` is actually for — a good question that exposed
+scope creep in how it was first written. Answer: two external audiences,
+per Architecture §4's original design — (1) someone exercising LGPL
+relinking rights, who needs to identify exactly which FFmpeg build is
+linked, and (2) a reviewer/hiring manager auditing the licensing story,
+given the project's "public repo, licensing is a hard constraint" framing.
+Neither audience needs Phase 2 SRT planning commentary, which had been
+included — moved that reasoning to Architecture §4's own "do this at pin
+time" section (marked the libsrt open item resolved, §13 checkbox ticked),
+leaving `NOTICE.md` to state only the compliance-relevant fact (libsrt is
+present in the build).
+
+Re-reading the file with the audience question in mind surfaced a real,
+previously-unstated gap: the pinned build's configure line statically
+compiles roughly forty other third-party libraries into the same DLLs
+(`libsrt`, `gmp`, `libssh`, `sdl2`, `libaom`, etc.) — only FFmpeg's own LGPL
+status had been reviewed. Not a blocker (this plugin's code only calls
+FFmpeg's own public API, never these libraries directly), but a genuine gap
+on a project where licensing is a hard constraint. Stated plainly in
+`NOTICE.md` itself and logged as a new open item in Architecture §13, rather
+than left implicit.
+
+### Files updated this session
+
+`Plugins/IPStreamMedia/ThirdParty/FFmpeg/COPYING.LGPLv3` (new, verbatim copy),
+`Plugins/IPStreamMedia/ThirdParty/FFmpeg/NOTICE.md` (new, then refocused),
+`CLAUDE.md`, `Docs/Architecture.md` (LGPL version corrected throughout;
+libsrt finding relocated to §4 and §13; new third-party-audit open item),
+`LICENSE.md`, this file.
