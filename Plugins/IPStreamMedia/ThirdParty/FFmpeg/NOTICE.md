@@ -1,8 +1,15 @@
 # FFmpeg — Third-Party Notice
 
 This plugin dynamically links against FFmpeg's shared libraries
-(`avutil`, `avcodec`, `avformat`, `swscale`). FFmpeg is **not** modified —
-the DLLs shipped here are the unmodified build described below.
+(`avutil`, `avcodec`, `avformat`, `swscale`). **FFmpeg itself is not
+modified** — every `.dll` in `bin/Win64/` is byte-for-byte the unmodified
+build described below.
+
+One qualification, for completeness: the MSVC import libraries (`.lib`) in
+`lib/Win64/` **were regenerated** from this same build's own `.def` files —
+see [Import libraries regenerated](#import-libraries-regenerated) below.
+Import libraries are link-time scaffolding that contain no FFmpeg code; no
+FFmpeg binary, object, or source was altered.
 
 ## Exact build pinned
 
@@ -36,6 +43,50 @@ apply to FFmpeg only. The plugin's own source code is MIT.
 
 Confirms, relevant to this project's D3: no `--enable-gpl`, no
 `--enable-nonfree`.
+
+## Import libraries regenerated
+
+**If you re-download this FFmpeg build, you must repeat this step, or the
+plugin will build cleanly and then fail to load at editor startup.**
+
+The `.lib` files BtbN ships are **GNU-format import libraries** — these
+builds are cross-compiled with MinGW/GCC (visible in the configure line
+above: `--cross-prefix=x86_64-w64-mingw32-`, `--cc=x86_64-w64-mingw32-gcc`),
+so `dlltool` produces import libraries built from full COFF objects with
+explicit jump thunks, rather than the MSVC **short-import-record** format.
+
+MSVC's `/DELAYLOAD` can only transform short-import records. Given
+GNU-format libraries it links the imports as ordinary load-time imports and
+**silently ignores the flag** — no warning, no error. This plugin depends on
+delay loading (the DLLs live in this folder rather than on the system path,
+and are loaded explicitly at module startup), so the result was a plugin
+that compiled and linked perfectly and then failed at editor startup with
+`Missing import: avutil-61.dll`. Full diagnosis:
+[`Docs/M1DelayLoadRCA.md`](../../../../Docs/M1DelayLoadRCA.md).
+
+The four import libraries this plugin links were therefore regenerated from
+the `.def` files shipped in `lib/Win64/`, using MSVC's `lib.exe` (run from a
+Developer Command Prompt, in `lib/Win64/`):
+
+```
+lib /DEF:avutil-61.def   /OUT:avutil.lib   /MACHINE:X64 /NAME:avutil-61.dll
+lib /DEF:avcodec-63.def  /OUT:avcodec.lib  /MACHINE:X64 /NAME:avcodec-63.dll
+lib /DEF:avformat-63.def /OUT:avformat.lib /MACHINE:X64 /NAME:avformat-63.dll
+lib /DEF:swscale-10.def  /OUT:swscale.lib  /MACHINE:X64 /NAME:swscale-10.dll
+del *.exp
+```
+
+`/NAME:` is required, not cosmetic: the shipped `.def` files carry a bare
+`EXPORTS` list with no `LIBRARY` statement, so without it `lib.exe` derives
+the DLL name from the `/OUT:` filename and records `avutil.dll` — a DLL that
+does not exist in this build.
+
+Verify with `dumpbin /DEPENDENTS` on the built module binary: the four FFmpeg
+DLLs should appear under *"Image has the following delay load dependencies"*,
+not under plain dependencies.
+
+Only the four libraries this plugin actually links were regenerated;
+`avdevice`, `avfilter`, and `swresample` are left exactly as shipped.
 
 ## Not yet audited: other third-party libraries statically built into these DLLs
 

@@ -15,7 +15,9 @@ third-party native integration skill.
 
 ## Current status
 
-**Architecture agreed and documented. No code written. Nothing scaffolded.**
+**M1 — THE SPIKE — PASSED.** Recognisable image on a plane, timing measured
+(0.999s success case), clean PIE stop confirmed with no hang or crash across
+multiple runs, both success and failure paths.
 
 - Full design lives in [Docs/Architecture.md](Docs/Architecture.md) — module
   layout, Media Framework contract, threading, licensing, milestones M0–M6.
@@ -26,16 +28,38 @@ third-party native integration skill.
   due until M2.
 - **Repo-prep complete.** `.gitignore`/`.gitattributes` fixed (committed
   `d0fd929`). UE project `IPStreamMediaDemo` created at the repo root; the
-  `IPStreamMedia`/`IPStreamMediaFactory` plugin skeleton exists, compiles, and
-  both modules confirmed logging on startup in the correct order
-  (`PostConfigInit` factory, then default-phase runtime) — reviewed against
-  spec, no functional issues.
-- **Next action: M1 — the spike.** FFmpeg External module (`ThirdParty/FFmpeg`
-  `.Build.cs`), demux, decode, CPU swscale to BGRA, one Blueprint node. Concept
-  prep for this (Block B) is already done. See
-  [Architecture.md §10](Docs/Architecture.md) for the pass criterion (8s,
-  clean shutdown) and in/out-of-scope list. This is code-delivery work — the
-  (a)-chat-vs-(b)-direct-write question applies to every file.
+  `IPStreamMedia`/`IPStreamMediaFactory` plugin skeleton exists and compiles.
+- **M1 — the spike — code complete, plugin loads in the editor.**
+  `FFmpeg.Build.cs` (External module), `IPStreamMedia.Build.cs` wired to
+  depend on it, `IPStreamMediaModule.cpp` doing delay-load DLL resolution at
+  startup, and `IPStreamM1Spike.cpp`/`.h` (the throwaway
+  `UBlueprintFunctionLibrary`, `GrabOneFrame`) are all written and working.
+  Every FFmpeg and UE call in the spike was verified against the actual
+  headers on disk rather than recalled — see
+  [Docs/M1FFmpegWalkthrough.md](Docs/M1FFmpegWalkthrough.md) for the full
+  call-by-call reasoning.
+- **A delay-load failure blocked editor startup entirely and was root-caused
+  and fixed** — BtbN's FFmpeg `.lib` files are GNU-format import libraries,
+  which MSVC's `/DELAYLOAD` silently ignores; regenerated from the shipped
+  `.def` files with `lib.exe`. Full write-up:
+  [Docs/M1DelayLoadRCA.md](Docs/M1DelayLoadRCA.md). **If the FFmpeg pin is
+  ever re-downloaded, this must be repeated** — see
+  `ThirdParty/FFmpeg/NOTICE.md`.
+- **All three M1 pass criteria met, measured not eyeballed.** A `Tick`-based
+  timestamp trick (the game thread can't tick while blocked inside
+  `GrabOneFrame`, so the gap between `Tick` logs directly measures the
+  freeze) gave real numbers: **0.999s** for the full pipeline against the
+  real camera, **6.039s** for a deliberately unreachable URL — matching the
+  coded interrupt-callback deadline of `+6.0` almost exactly, empirically
+  confirming that mechanism works as designed. PIE stopped cleanly, no hang,
+  no crash, across multiple runs of both the success and failure paths.
+- **Next action:** M1 is throwaway per D8 — delete the spike code, run
+  Block C (Media Framework concept prep, not yet started), then begin M2,
+  the real `IMediaPlayer` module. Then commit/push the M1 work first;
+  uncommitted work includes four regenerated binary `.lib` files via LFS, so
+  run the credential-pattern check first. (Two loose local files,
+  `GoodStream.txt`/`BadStream.txt`, are flagged for deletion in the session
+  log — not caught by the existing `.gitignore` pattern.)
 - Phase 1 = RTSP only. SRT is Phase 2, RTMP is Phase 3.
 
 ## Key decisions made so far
@@ -150,6 +174,38 @@ This is already the pattern in the session log; extend it to code.
 
 **Concept prep precedes each milestone.** Before starting a milestone, cover the
 concepts it depends on — no code until the ideas are in place.
+
+### Code walkthrough docs
+
+**For any code touching an unfamiliar API surface — a C-style library like
+FFmpeg being the concrete case so far, but not limited to it — a dedicated
+walkthrough doc is standard practice, not optional.** This emerged directly
+from M1: extensive explanation of surrounding C++ mechanics (pointers,
+linkage, `extern "C"`) and domain theory (video coding concepts) did not, by
+itself, add up to Sanjyot actually understanding the code he'd just typed in
+and compiled — call-by-call reasoning through the API sequence itself was
+the missing piece, and it had to be taught as its own, separate pass.
+
+**Format**, established by
+[Docs/M1FFmpegWalkthrough.md](Docs/M1FFmpegWalkthrough.md) — treat it as the
+template for the next one:
+
+- One file per unfamiliar-API code unit, named `Docs/<Milestone><Subject>
+  Walkthrough.md`. Kept separate from `Architecture.md` (system design) and
+  `Glossary.md` (term definitions) — this is specifically call-by-call code
+  reasoning: what each line does, why this call and not an alternative, what
+  it hands back and why the next line needs that.
+- **Chunked and checked, not one full pass.** One logical "job" per section;
+  confirm each chunk actually lands before moving to the next. A single long
+  narrated walkthrough is harder to absorb than several short ones.
+- Explain the code's own logic first. Surrounding language mechanics and
+  domain theory are supporting material, not a substitute for it.
+- Update the doc live, chunk by chunk, as each one is covered in
+  conversation — not written up after the fact from memory. Chat is
+  ephemeral; the doc is what has to survive to an actual interview.
+- Sanjyot adds comments to the code himself, in his own words, once he
+  understands a piece. Suggest comment wording in chat; don't write comments
+  into source files unless he asks.
 
 ### Code delivery — hard rule
 

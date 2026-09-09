@@ -20,13 +20,46 @@ recent entries for detail.
 
 ## Current state
 
-**As of:** 2026-09-08 (Session 3)
+**As of:** 2026-09-09 (Session 5)
 **Phase:** 1 — RTSP ingest
-**Status:** M0 complete. Blocks A and B complete. Repo-prep complete. FFmpeg
-build pinned (`N-126455-gecc7eb519e-20260907`, **LGPL v3** — corrected from an
-assumed 2.1, see below) and placed in
-`Plugins/IPStreamMedia/ThirdParty/FFmpeg/`. M1 (the spike) not yet started —
-next real coding session.
+**Status:** M1 spike code complete, building, **and the plugin now loads in
+the editor** — a delay-load failure that blocked startup entirely was root-
+caused and fixed (Session 5 below; full write-up in
+[Docs/M1DelayLoadRCA.md](Docs/M1DelayLoadRCA.md)). `FFmpeg.Build.cs`,
+`IPStreamMedia.Build.cs`, `IPStreamMediaModule.cpp` (delay-load DLL
+resolution at startup), and `IPStreamM1Spike.h`/`.cpp` (the throwaway
+`GrabOneFrame` Blueprint node) are all written and working.
+
+**The spike works.** `GrabOneFrame` has been run against the real camera over
+RTSP and returned a decoded frame — apparently fast (impression, not a
+measurement). The three unknowns D8 set out to test are all resolved.
+
+**Next action: finish M1's pass criterion**, which is not the same as "it
+works." Still to do: get the frame onto a plane in the level as a
+*recognisable image*, measure the time properly instead of eyeballing it, and
+test **stopping PIE returns control to the editor with no hang and no
+crash** — that half of the criterion is completely untested, and it's the
+half that exists to catch the hardest remaining problem. Then commit/push
+(uncommitted work includes four regenerated binary `.lib` files via LFS —
+run the credential-pattern check first, per the hard rule).
+
+**Standing gotcha, now documented:** if the FFmpeg pin is ever re-downloaded,
+the MSVC import libraries must be regenerated (see
+`ThirdParty/FFmpeg/NOTICE.md`) or the plugin will build cleanly and fail to
+load.
+
+**M1 — THE SPIKE — PASSED.** All three criteria confirmed: recognisable
+image on a plane, timing measured (0.999s), clean PIE stop with no hang or
+crash across multiple good and bad runs. Full detail in Session 5 below.
+**Next action:** M1 is throwaway per D8 — delete the spike code, run Block C
+(Media Framework concept prep), then start M2, the real `IMediaPlayer`
+module. Not started yet; a deliberate stopping point, not an oversight.
+
+**New standing practice, now in `CLAUDE.md`:** per-file "code walkthrough"
+docs (see [Docs/M1FFmpegWalkthrough.md](Docs/M1FFmpegWalkthrough.md),
+the template) — chunked, call-by-call, checked interactively — for any code
+touching an unfamiliar API surface. See Session 4 below for why this
+became a rule rather than a one-off.
 
 **RESOLVED 2026-09-05: credential exposure on the public GitHub repo.**
 `output.txt`, committed in `1713393` ("M0 Testing", tip of `main`) and live on
@@ -709,3 +742,372 @@ than left implicit.
 `CLAUDE.md`, `Docs/Architecture.md` (LGPL version corrected throughout;
 libsrt finding relocated to §4 and §13; new third-party-audit open item),
 `LICENSE.md`, this file.
+
+---
+
+## Session 4 — 2026-09-08 to 2026-09-09
+
+**Type:** M1 — the spike. First actual code written on this project.
+Delivered in chat (option (a)) throughout, Sanjyot typing everything in
+himself and building it.
+
+### `FFmpeg.Build.cs` written — and a real bug caught in the architecture doc before it caused a build failure
+
+Before writing anything, verified the planned module layout against UBT's
+actual source (`Engine/Source/Programs/UnrealBuildTool/System/RulesCompiler.cs`)
+rather than trusting `Architecture.md §5`'s tree diagram. Found a genuine
+error: UBT only discovers plugin modules — `ModuleType.External` ones
+included — under a plugin's `Source/` folder. The diagram had
+`FFmpeg.Build.cs` living directly under `Plugins/IPStreamMedia/ThirdParty/`,
+a sibling of `Source/`, never a plugin-module folder UBT scans. Following
+that plan as written would have produced a module that silently never
+existed.
+
+**Fixed by precedent, not invented:** Epic's own `OpenCV` plugin
+(`Engine/Plugins/Runtime/OpenCV/Source/ThirdParty/OpenCV/OpenCV.Build.cs`)
+splits exactly this way — the `.Build.cs` lives under `Source/ThirdParty/
+FFmpeg/`, a near-empty module folder holding only build rules, while the
+actual binaries (already LFS-committed) stay at
+`Plugins/IPStreamMedia/ThirdParty/FFmpeg/{include,lib,bin}`, referenced from
+the Build.cs via the `PluginDirectory` property. `Architecture.md §5`
+corrected with a note explaining the mistake and the fix, rather than
+silently rewritten.
+
+`FFmpeg.Build.cs` links only the four libraries M1 actually touches
+(`avformat`, `avcodec`, `avutil`, `swscale` — `avdevice`/`avfilter`/
+`swresample` deliberately left unlinked, audio being permanently out of
+scope), using `PublicSystemIncludePaths`, `PublicAdditionalLibraries`,
+`PublicDelayLoadDLLs`, and `RuntimeDependencies`, gated behind
+`Target.Platform == UnrealTargetPlatform.Win64` with a `WITH_FFMPEG`
+define for the (currently inert, deliberately future-proofed) non-Win64
+branch. Every UBT API used (`ModuleType.External`, the `RuntimeDependencies`
+overloads, `PluginDirectory`) was checked against
+`ModuleRules.cs`/`OpenCV.Build.cs` on disk before being written, not
+recalled.
+
+### `IPStreamMedia.Build.cs` and `IPStreamMediaModule.cpp` — wiring the dependency, loading the DLLs
+
+`IPStreamMedia.Build.cs` updated to add `"FFmpeg"` (private — nothing
+outside this module should ever see FFmpeg's types) and later `"Projects"`
+(for `IPluginManager.h`).
+
+`IPStreamMediaModule.cpp` now does the actual DLL resolution Architecture
+§9 called for: at `StartupModule`, resolves the plugin's own base directory
+via `IPluginManager::Get().FindPlugin("IPStreamMedia")->GetBaseDir()`,
+pushes `ThirdParty/FFmpeg/bin/Win64` onto the DLL search path, and calls
+`FPlatformProcess::GetDllHandle` on each of the four delay-loaded DLLs
+explicitly, logging (not crashing) on a per-DLL failure — a real, expected
+failure mode given this project's own documented LFS/`.gitignore` risk, not
+speculative defensiveness. `ShutdownModule` frees the handles in reverse
+order. All four `FPlatformProcess`/`IPluginManager` signatures verified
+against `GenericPlatformProcess.h`/`Interfaces/IPluginManager.h` on disk.
+
+### `IPStreamM1Spike.h`/`.cpp` written — the actual throwaway spike
+
+One `UBlueprintFunctionLibrary`, one function:
+`GrabOneFrame(const FString& RtspUrl)`, synchronous and blocking by design
+(not async/latent — that complexity belongs to M2+, and a blocking call
+sidesteps M4's harder shutdown-race problem entirely, since nothing is left
+running on another thread for "stop PIE" to hang on). Full pipeline: a
+pre-allocated `AVFormatContext` with an `AVIOInterruptCB` wired to a
+6-second wall-clock deadline (needed even for a "throwaway" spike, since
+without it a dead URL freezes the whole editor, not just PIE, given this
+runs on the game thread) → `avformat_open_input` with `rtsp_transport=tcp`/
+trimmed `probesize`/`analyzeduration` → `avformat_find_stream_info` +
+scan for the video stream (skipping the camera's PCM A-law audio track,
+confirmed present in the same session as a second stream in the array) →
+`avcodec_find_decoder`/`avcodec_alloc_context3`/`avcodec_parameters_to_context`/
+`avcodec_open2` → a `av_read_frame`/`avcodec_send_packet`/
+`avcodec_receive_frame` loop stopping at the first successfully decoded
+frame → `sws_scale` YUV420P→BGRA → `UTexture2D::CreateTransient` +
+direct `BulkData` write + `UpdateResource()`. Every FFmpeg and UE call
+verified against the actual headers on disk (`ThirdParty/FFmpeg/include/`
+and the UE 5.3 engine source) before being written — several signatures
+(`avformat_open_input`'s `ps`-may-be-preallocated behavior, `AVFrame::format`
+being a plain `int` not the enum, `CreateTransient` not calling
+`UpdateResource` internally) came back different from what recall alone
+would have produced. **Build succeeded. Not yet run in the editor or tested
+against the camera** — M1's actual 8-second pass/fail criterion is still
+unmeasured.
+
+### Real course-correction: code was compiling but not understood — new standing practice adopted
+
+After the code was written and built, Sanjyot flagged a genuine problem
+rather than proceeding: he could follow the surrounding C++ mechanics
+(pointers, linkage, `extern "C"` — all explained at length) and the video-
+coding theory, but not the actual FFmpeg call sequence's own logic — unable
+to defend the lines he'd just typed and compiled. Correctly identified as a
+teaching-depth problem, not a capability one — build succeeded, nothing was
+actually wrong, and FFmpeg's C API isn't the kind of obscure/version-
+specific surface the model table's confabulation warning targets (that's
+specifically about UE Media Framework). Considered and explicitly rejected
+switching to Opus for this reason; stayed on Sonnet.
+
+**Fix, agreed and executed:** a dedicated walkthrough doc,
+[Docs/M1FFmpegWalkthrough.md](Docs/M1FFmpegWalkthrough.md), covering the
+entire `IPStreamM1Spike.cpp` FFmpeg sequence in eight chunks (setup/
+interrupt-callback, opening the connection, finding the video stream,
+opening the decoder, the decode loop, cleanup, the swscale conversion, the
+texture upload), each explaining what the call's job is, why this call and
+not an alternative, and what it hands back and why the next line needs
+that — chunked and confirmed one piece at a time in conversation, not
+delivered as one long pass. Explicitly not a duplicate of `Architecture.md`
+(system design) or `Glossary.md` (term definitions) — this is call-by-call
+code reasoning specifically, the piece that had been missing.
+
+**Promoted to a standing rule**, not treated as a one-off: `CLAUDE.md` gained
+a new "Code walkthrough docs" subsection under *How we work together*,
+codifying the format (one file per unfamiliar-API code unit, chunked and
+checked, code's own logic explained before surrounding mechanics/theory,
+updated live rather than written up after the fact) for any future code
+touching an unfamiliar API surface, not just FFmpeg. `CLAUDE.md`'s Current
+status section also corrected — it still read "No code written. Nothing
+scaffolded," stale since before this session.
+
+Also surfaced during the walkthrough: a small but real structural
+preference for the *actual* (non-spike) codebase going forward — Sanjyot
+wants real M2+ functions broken into smaller, clearly-named pieces (unlike
+the single-function shape of the throwaway `GrabOneFrame`), specifically for
+six-months-later readability. Not applied to M1 itself — deliberately, since
+it's deleted regardless per D8 — but worth carrying into M2.
+
+### Glossary and other doc updates this session
+
+`Docs/Glossary.md`: new `IPluginManager`/`GetBaseDir()` entry (§5); new
+"Translation unit" and "Internal vs external linkage" entries (§5), added
+after a from-scratch explanation of `void*`, function pointers, and
+anonymous vs. named namespaces that took several iterations to land at the
+right level of simplicity — worth remembering for future teaching in this
+project: start plainer than feels necessary for foundational C/C++
+mechanics the user hasn't hit before, even when he's an experienced UE C++
+programmer generally.
+
+### Files updated this session
+
+`Plugins/IPStreamMedia/Source/ThirdParty/FFmpeg/FFmpeg.Build.cs` (new),
+`Plugins/IPStreamMedia/Source/IPStreamMedia/IPStreamMedia.Build.cs`,
+`Plugins/IPStreamMedia/Source/IPStreamMedia/Private/IPStreamMediaModule.cpp`,
+`Plugins/IPStreamMedia/Source/IPStreamMedia/Private/IPStreamM1Spike.h` (new),
+`Plugins/IPStreamMedia/Source/IPStreamMedia/Private/IPStreamM1Spike.cpp`
+(new), `Docs/M1FFmpegWalkthrough.md` (new), `Docs/Architecture.md` (§5
+module-tree correction, Block B status line corrected), `Docs/Glossary.md`
+(`IPluginManager`, translation unit, linkage entries), `CLAUDE.md` (new
+Code walkthrough docs subsection, Current status corrected), this file.
+
+---
+
+## Session 5 — 2026-09-09
+
+**Type:** M1 debugging — plugin failed to load at editor startup. Continued
+directly from Session 4 in the same conversation; **switched Sonnet → Opus
+partway through**, per `CLAUDE.md`'s model table, which names "M1 debugging —
+delay-load failures, unresolved externals against FFmpeg import libs" as an
+explicit Opus trigger. The rule worked as designed: Sonnet's hypotheses were
+reasonable but wrong, and the switch happened on evidence (two failed fixes),
+not vibes.
+
+### The failure
+
+The project compiled and linked with zero errors, then the editor refused to
+load the plugin. `DebugGame Editor` log:
+
+```
+LogWindows: Failed to load '...UnrealEditor-IPStreamMedia-Win64-DebugGame.dll' (GetLastError=126)
+LogWindows:   Missing import: avutil-61.dll   (+ avcodec-63, avformat-63, swscale-10)
+LogPluginManager: Error: Plugin 'IPStreamMedia' failed to load because module
+                  'IPStreamMedia' could not be loaded.
+```
+
+### Root cause
+
+**BtbN's FFmpeg Windows builds are cross-compiled with MinGW/GCC, so the
+shipped `.lib` files are GNU-format import libraries — full COFF objects with
+explicit `dlltool` jump thunks (`_t.o`/`_h.o`/`_s#####.o`), containing zero
+MSVC short-import records. MSVC's `/DELAYLOAD` can only transform
+short-import records; given GNU-format libraries it accepts the flag, links
+`delayimp.lib`, emits no warning, and produces ordinary load-time imports
+anyway.**
+
+The consequence inverted the entire load-order design: the FFmpeg DLLs became
+load-time dependencies → Windows demanded them before loading the module
+binary → the module binary failed to load → so `StartupModule()`, containing
+the `PushDllDirectory`/`GetDllHandle` code written precisely to solve that
+problem, never ran. The delay-load architecture (decided in Block B concept
+prep, weeks earlier) was correct and had simply never engaged.
+
+Full diagnosis, including the diagnostic path and the dead ends, in
+[Docs/M1DelayLoadRCA.md](Docs/M1DelayLoadRCA.md) — written as a base document
+for a portfolio devlog.
+
+### How it was found (condensed)
+
+1. **Stale-binary theory — refuted** by file mtimes: the captured log
+   predated the clean rebuild by ~30 min; the binary was fresh.
+2. **Two experiments that couldn't have helped** — changing the factory's
+   `LoadingPhase`, adding `AdditionalDependencies` to the `.uplugin`. Both
+   operate at plugin-orchestration level; the failure was in the OS loader
+   resolving a PE import table. Both reverted.
+3. **`.Build.cs` logging** proved the build script ran with correct values —
+   eliminated a hypothesis class without finding the bug.
+4. **Read the engine's own diagnostic source**
+   (`WindowsPlatformProcess.cpp`, `ReadLibraryImportsFromMemory`): it reads
+   only `IMAGE_DIRECTORY_ENTRY_IMPORT`, never the delay-import directory.
+   **This was the pivot** — it meant the four DLLs were provably *regular*
+   imports, not a generic "can't find DLL" message.
+5. **Linker response file** showed `/DELAYLOAD:` was correctly emitted for all
+   four, plus `delayimp.lib` → the bug is below the build system.
+6. **`dumpbin /DEPENDENTS`** on the built binary: no delay-load section at
+   all → the linker ignored the flags.
+7. **`dumpbin /IMPORTS`**: functions only, no data imports (data imports
+   legitimately can't be delay-loaded — ruled that out). No `LNK4199`.
+8. **`dumpbin /ARCHIVEMEMBERS` + `/HEADERS` on `avutil.lib`**: GNU `dlltool`
+   objects, **0 short-import records**. Root cause.
+9. **Verified the fix before proposing it**: regenerating from the same
+   `.def` with `lib.exe` produced **639** short-import records, each
+   correctly recording `avutil-61.dll`.
+
+### Fix, and the alternatives rejected
+
+Regenerated the four linked import libraries from the `.def` files shipped in
+`lib/Win64/`, with `lib /DEF:... /MACHINE:X64 /NAME:<versioned>.dll`.
+`/NAME:` is mandatory — the `.def` files have no `LIBRARY` statement, so
+without it `lib.exe` records `avutil.dll`, which doesn't exist. **No source
+changes were needed**; `FFmpeg.Build.cs`, the startup code, and the
+descriptor were all already correct. Confirmed by Sanjyot: delay-load section
+present in `dumpbin`, plugin loads.
+
+**Rejected — B: drop delay loading, copy DLLs next to the module binary.**
+Would have worked (UE searches the plugin's own `Binaries/Win64`, visible in
+the failure log's search paths) and needed only a `RuntimeDependencies`
+change with vendor files untouched. Rejected because it works *around* a
+deliberate decision rather than fixing it: `PublicDelayLoadDLLs` becomes a
+no-op, the explicit startup-loading code becomes dead, and Architecture §9 +
+the Glossary would need rewriting to describe a weaker mechanism — all to
+avoid a four-command fix.
+
+**Rejected — C: runtime-only `LoadLibrary`/`GetProcAddress` linking.**
+Already rejected in Block B as more code for no benefit; that rejection had
+assumed delay loading worked, but the conclusion survives the assumption
+changing (~21 function pointers for the spike alone, growing).
+
+### Documentation added
+
+- `Docs/M1DelayLoadRCA.md` (new) — full RCA, written to be rewritten as a
+  devlog. Deliberately keeps the wrong turns and marks which claims are
+  empirically demonstrated here vs. mechanism explanation.
+- `ThirdParty/FFmpeg/NOTICE.md` — new "Import libraries regenerated" section
+  with the exact commands and a **"repeat this after any FFmpeg
+  re-download"** warning; opening "FFmpeg is not modified" claim qualified
+  (DLLs are byte-for-byte unmodified; the `.lib` files were regenerated —
+  link-time scaffolding containing no FFmpeg code, so LGPL-immaterial, but a
+  compliance reader deserves the full picture).
+- `Docs/Architecture.md §9` — new subsection recording that delay loading has
+  an unstated prerequisite (import library format), plus a standing check to
+  run `dumpbin /DEPENDENTS` whenever the FFmpeg pin changes.
+
+### The lesson worth carrying forward
+
+**Configuration is not behaviour.** Every layer reported success — build
+script correct, UBT flags correct, linker accepted them, build succeeded —
+and the mechanism still never engaged. Verifying a setting was *applied* is
+not the same as verifying it *took effect*. The standing `dumpbin` check now
+in Architecture §9 exists because of this.
+
+### First frame — the spike works
+
+**`GrabOneFrame` was run against the real camera over RTSP and returned a
+frame.** End to end: connect → demux → decode → CPU swscale → `UTexture2D`.
+Sanjyot's impression was "within a second," **explicitly not a measurement** —
+eyeballed, not instrumented, and recorded here as an impression so it doesn't
+later get quoted as a number. If it holds up under actual measurement it is
+comfortably inside the 8-second criterion (which was calibrated against the
+secondary stream's ~2s GOP).
+
+This answers the spike's actual question — D8's whole purpose was buying
+information about the three unknowns (ThirdParty `.Build.cs` integration,
+FFmpeg inside Unreal, the camera itself). All three are now known-good.
+
+**M1 is not yet passed.** The formal criterion also requires: a *recognisable
+image on a plane in the level* (not just a returned texture object), the
+8-second bound actually measured rather than eyeballed, and **stopping PIE
+returning control to the editor immediately with no hang and no crash** —
+that last one is half the criterion and is entirely untested. Deferred to the
+next session by agreement.
+
+### Files updated this session
+
+`Plugins/IPStreamMedia/ThirdParty/FFmpeg/lib/Win64/{avutil,avcodec,avformat,swscale}.lib`
+(regenerated), `Plugins/IPStreamMedia/ThirdParty/FFmpeg/NOTICE.md`,
+`Plugins/IPStreamMedia/IPStreamMedia.uplugin` (experiments reverted),
+`Plugins/IPStreamMedia/Source/ThirdParty/FFmpeg/FFmpeg.Build.cs` (debug
+scaffolding removed), `Docs/M1DelayLoadRCA.md` (new),
+`Docs/Architecture.md` (§9), `CLAUDE.md` (Current status), this file.
+
+### M1 pass criterion closed out — measured, not eyeballed
+
+Continuing the same day. Two things done: a Blueprint wired `GrabOneFrame`'s
+returned texture into a dynamic material instance's texture parameter on a
+plane (`BP_SpikePlane`), and a `Tick`-based timestamp print gave a free,
+zero-extra-instrumentation way to measure the game-thread freeze — `Tick`
+physically cannot fire while the thread is blocked inside a synchronous
+call, so the gap between consecutive `Tick` log lines *is* the blocking
+duration.
+
+**Good stream** (the real camera): last tick before the call to first tick
+after —
+
+```
+37:58.868  →  37:59.867   (delta: 0.999s)
+```
+
+Full pipeline — connect, demux, decode, swscale, `UTexture2D` creation, and
+the material parameter update — in **0.999 seconds**, measured, not the
+earlier eyeballed "about a second." Comfortably inside the 8-second
+criterion.
+
+**Bad stream** (deliberately unreachable — `freja.hiof.no:1935`, a public
+RTSP test endpoint chosen specifically so the URL itself carries no
+credentials and is safe to reference): three ticks at normal ~8ms cadence,
+then silence, then the logged open failure, then the next tick —
+
+```
+last normal tick: 34:51.370
+error logged:      "Failed to open: rtsp://freja.hiof.no:..."
+next tick:         34:57.409   (delta: 6.039s)
+```
+
+**6.039 seconds** — against a coded interrupt-callback deadline of exactly
+`+6.0`. 39ms of overhead on top of a 6-second bound is about as tight a
+real-world confirmation as this mechanism could produce: the `AVIOInterruptCB`
+from `M1FFmpegWalkthrough.md` §1 is doing precisely what it was designed to
+do, empirically, not just in theory.
+
+**Both numbers kept as the devlog's before/after-style result** (D11: no
+latency target, a documented reproducible method and whatever number falls
+out) — 0.999s success case, 6.039s worst-case-bounded failure case.
+
+**PIE-stop tested explicitly, multiple times, both scenarios** (distinct
+from `Tick` resuming, which only proves the game thread was unblocked —
+this is the actual "click Stop and observe" action the criterion asks for).
+No hangs, no crashes, in either the good-stream or bad-stream case, across
+multiple repetitions.
+
+**M1 is PASSED.** All three criteria from the Session 1 pass/fail definition
+are met. Per D8, this code is throwaway — next up is deleting the spike,
+Block C (Media Framework concept prep), then M2's real `IMediaPlayer`
+module. Not started this session, a deliberate stop, not a gap.
+
+**Housekeeping flagged, not yet actioned:** `GoodStream.txt`/`BadStream.txt`
+(the raw capture files these numbers came from) sit at the repo root,
+untracked, and are **not** caught by the existing `output*.txt` `.gitignore`
+rule — a different filename shape than the one added after the 2026-09-05
+incident. Content in both is confirmed safe (no camera credentials — the bad
+stream deliberately used a public test URL for exactly this reason), but per
+the project's own rule, raw captures are disposable once their numbers are
+extracted into `Docs`/the session log, which they now are. Recommended:
+delete both rather than leave them sitting unprotected.
+
+### Files updated, continued
+
+`GoodStream.txt`, `BadStream.txt` (new, local, flagged for deletion —
+see above), this file.

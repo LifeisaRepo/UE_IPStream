@@ -217,6 +217,9 @@ Plugins/IPStreamMedia/
       Private/
         IPStreamMediaFactoryModule.cpp
       IPStreamMediaFactory.Build.cs
+    ThirdParty/
+      FFmpeg/
+        FFmpeg.Build.cs   # ModuleType.External
   ThirdParty/
     FFmpeg/
       include/          # libavcodec/ libavformat/ libavutil/ libswscale/
@@ -224,11 +227,27 @@ Plugins/IPStreamMedia/
       bin/Win64/        # runtime DLLs
       COPYING.LGPLv3
       NOTICE.md
-      FFmpeg.Build.cs   # ModuleType.External
   Content/              # demo material + MediaTexture. Minimal.
   Resources/Icon128.png
   Docs/
 ```
+
+**Correction (M1, verified against UBT source on disk,
+`Engine/Source/Programs/UnrealBuildTool/System/RulesCompiler.cs`):** UBT only
+discovers plugin modules — including `ModuleType.External` ones — under
+`Source/`. A `.Build.cs` living directly under the plugin root's `ThirdParty/`
+(as originally sketched here) is never scanned and the module would not exist.
+Epic's own `OpenCV` plugin (`Engine/Plugins/Runtime/OpenCV/Source/ThirdParty/OpenCV/OpenCV.Build.cs`)
+is the precedent this now follows: the `.Build.cs` lives at
+`Source/ThirdParty/FFmpeg/FFmpeg.Build.cs`, a near-empty module folder that
+only contains build rules, while the actual binaries stay where they were
+already committed via LFS — `Plugins/IPStreamMedia/ThirdParty/FFmpeg/{include,lib,bin}` —
+referenced from the Build.cs via `PluginDirectory`. Two real folders named
+`FFmpeg` under the same plugin, one holding a build-rules file and one holding
+binaries, reads oddly at first glance; the alternative (moving the binaries
+under `Source/ThirdParty/FFmpeg/`) was rejected to avoid re-doing the LFS
+commit for no functional gain — UBT does not care where the binaries
+physically live, only where the `.Build.cs` sits.
 
 ### Why two modules
 
@@ -385,6 +404,38 @@ repository — which is the one moment that matters.
   module startup, with the DLL directory pushed
 - `RuntimeDependencies.Add(..., StagedFileType.NonUFS)` for packaged builds
 
+### Delay loading has an unstated prerequisite: import library format
+
+**Discovered the hard way during M1 (2026-09-09) — full diagnosis in
+[M1DelayLoadRCA.md](M1DelayLoadRCA.md).**
+
+`PublicDelayLoadDLLs` is necessary but **not sufficient**. MSVC's
+`/DELAYLOAD` can only transform imports that come from **MSVC
+short-import-format** import libraries. The FFmpeg build pinned here is
+cross-compiled with MinGW/GCC, so its shipped `.lib` files are GNU-format
+(full COFF objects with explicit jump thunks). Handed those, the linker
+accepts `/DELAYLOAD`, links `delayimp.lib`, emits **no warning**, and
+produces ordinary load-time imports anyway.
+
+The consequence is specifically nasty because it inverts the load order this
+whole section depends on: the DLLs become load-time dependencies, Windows
+demands them before it will load the module binary, the module binary fails
+to load, and therefore `StartupModule()` — containing the
+`PushDllDirectory`/`GetDllHandle` code written to solve exactly this — never
+runs at all. The design is correct; it simply never executes.
+
+Fixed by regenerating the four linked import libraries from the `.def` files
+shipped alongside them, with `lib.exe /DEF: ... /NAME:<versioned>.dll` —
+commands recorded in
+[`ThirdParty/FFmpeg/NOTICE.md`](../Plugins/IPStreamMedia/ThirdParty/FFmpeg/NOTICE.md),
+which is also where the "repeat this after any FFmpeg re-download" warning
+lives.
+
+**Standing check whenever the FFmpeg pin changes:** after rebuilding, run
+`dumpbin /DEPENDENTS` on the module binary and confirm the FFmpeg DLLs sit
+under *delay load dependencies*, not plain dependencies. Configuration being
+present in `.Build.cs` proves nothing about whether it took effect.
+
 Editor-side DLL loading working proves **nothing** about packaged-build staging.
 This is why a packaged build is a milestone (M5) rather than a final step.
 
@@ -417,9 +468,11 @@ real hardware. Satisfied during Session 1: [Docs/TestSource.md](TestSource.md)
 records the accounted-for output, including the InstaStream/GOP investigation
 that came out of it.
 
-**Status:** Block A done. **Block B in progress** — FFmpeg's architecture
-covered; Unreal's build system (UBT, modules, `.Build.cs`, DLL loading and
-staging) still pending, next before M1 begins.
+**Status:** Blocks A and B done — FFmpeg's architecture and Unreal's build
+system (UBT, modules, `.Build.cs`, DLL loading and staging) both covered. (This
+line previously lagged the session log; corrected 2026-09-08 to match
+[the session log](../UE_IPStream_Session_Log.md)'s Current-state block, which
+is the more current source.)
 
 ### M0 — one evening, before week 1: prove the stream outside Unreal
 

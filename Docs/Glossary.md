@@ -226,6 +226,26 @@ buffering for smoothness and prioritise latency.
 
 ## 5. Unreal build system
 
+**Translation unit** — one `.cpp` file plus everything its `#include`s
+transitively pull in, as the compiler actually sees it. The compiler's unit of
+work: it compiles one translation unit at a time into one object file, with no
+memory of any other `.cpp`'s contents. *Why it matters here:* "internal
+linkage," below, means "confined to one translation unit" — this is the thing
+it's confined to.
+
+**Internal vs external linkage** — whether a name declared at file/namespace
+scope can be referenced from a *different* `.cpp` file after compilation.
+**External** (the default for a plain function or a named namespace's
+contents) means yes — another translation unit can declare it `extern` (or
+qualify it, for a named namespace) and link against it. **Internal** (`static`
+at file scope, or anything inside an **anonymous namespace**) means no — the
+name exists only within the translation unit that declared it; nothing else
+can link against it even in principle, and two different `.cpp` files can
+reuse the identical name with zero collision. *Why it matters here:*
+`GFFmpegDllNames` in `IPStreamMediaModule.cpp` is wrapped in an anonymous
+namespace specifically for internal linkage — it's a private implementation
+detail of that one file, not something any other module should ever reach.
+
 **UBT (Unreal Build Tool)** — Unreal's own build orchestrator, which sits above
 MSVC and decides what compiles, with which flags, linked against what. Configured
 in **C#**, not in Visual Studio project files. Project files are generated
@@ -296,6 +316,18 @@ the heavier runtime module loads later.
 
 **`.uplugin`** — the plugin's JSON manifest: name, modules, loading phases,
 platform list.
+
+**`IPluginManager` / `IPlugin::GetBaseDir()`** — the runtime counterpart to
+`.uplugin`: code that finds where a *named* plugin actually lives on disk,
+right now, in *this* running process. `.uplugin` says a plugin called
+`IPStreamMedia` exists; `IPluginManager::Get().FindPlugin(TEXT("IPStreamMedia"))`
+is how code asks "where is it, on this machine, in this build?" and
+`GetBaseDir()` answers with a path. *Why it matters here:* that path is
+different in the editor (the source tree, in place) versus a packaged build
+(wherever the packager put the plugin's staged copy) — see "Editor build vs
+packaged build" below. Computing the FFmpeg DLL directory via `GetBaseDir()`
+at module startup, rather than hardcoding a relative path, is what makes the
+same code correct in both.
 
 **`UnrealTargetPlatform`** — the enum `.Build.cs` checks (e.g.
 `UnrealTargetPlatform.Win64`) to guard platform-specific logic. *Why it matters
