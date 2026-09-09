@@ -12,7 +12,6 @@ public class IPStreamMedia : ModuleRules
 			new string[]
 			{
 				"Core",
-				// ... add other public dependencies that you statically link with here ...
 			}
 			);
 			
@@ -22,7 +21,8 @@ public class IPStreamMedia : ModuleRules
 			{
 				"CoreUObject",
 				"Engine",
-				// ... add private dependencies that you statically link with here ...	
+				"FFmpeg",		// For FFmpeg integration
+				"Projects",		// For IPluginManager.h
 			}
 			);		
 		
