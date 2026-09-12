@@ -23,8 +23,24 @@ public class IPStreamMedia : ModuleRules
 				"Engine",
 				"FFmpeg",		// For FFmpeg integration
 				"Projects",		// For IPluginManager.h
+				"MediaUtils",	// For FMediaSamples
 			}
-			);		
+			);
+
+		DynamicallyLoadedModuleNames.AddRange(
+			new string[]
+			{
+                "Media"		// Headers only, no linkage - Media's public surface is pure-virtual
+							// interfaces, so there is nothing to link against.
+			}
+            );
+
+		PrivateIncludePathModuleNames.AddRange(
+			new string[]
+			{
+				"Media"		// This is to ensure IMediaPlayer.h and friends can be included without linker errors.
+			}
+			);
 		
 	}
 }

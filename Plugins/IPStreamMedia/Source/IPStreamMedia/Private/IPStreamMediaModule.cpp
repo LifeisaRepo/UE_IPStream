@@ -1,6 +1,7 @@
 ﻿// Copyright (c) 2026 Sanjyot Dahale. Licensed under the MIT License — see LICENSE.md.
 
 #include "IIPStreamMediaModule.h"
+#include "IPStreamPlayer.h"
 #include "Modules/ModuleManager.h"
 #include "Interfaces/IPluginManager.h"
 #include "HAL/PlatformProcess.h"
@@ -44,6 +45,12 @@ public:
 		UE_LOG(LogIPStreamMedia, Log, TEXT("IPStreamMedia module has shut down"));
 	}
 
+	//~ IIPStreamMediaModule interface
+
+	virtual TSharedPtr<IMediaPlayer, ESPMode::ThreadSafe> CreatePlayer(IMediaEventSink& EventSink) override
+	{
+		return MakeShared<FIPStreamPlayer, ESPMode::ThreadSafe>(EventSink);
+	}
 
 private:
 #if WITH_FFMPEG

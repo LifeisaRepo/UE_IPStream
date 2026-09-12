@@ -15,17 +15,21 @@ third-party native integration skill.
 
 ## Current status
 
-**M1 — THE SPIKE — PASSED.** Recognisable image on a plane, timing measured
-(0.999s success case), clean PIE stop confirmed with no hang or crash across
-multiple runs, both success and failure paths.
+**M1 — THE SPIKE — PASSED, committed, and pushed.** Commit `81714c5`
+("First Spike Successful"), on `main`, matching `origin/main`. Recognisable
+image on a plane, timing measured (0.999s success case), clean PIE stop
+confirmed with no hang or crash across multiple runs, both success and
+failure paths.
 
 - Full design lives in [Docs/Architecture.md](Docs/Architecture.md) — module
   layout, Media Framework contract, threading, licensing, milestones M0–M6.
 - **Concept prep delivered as five blocks (A–E)**, each front-loading the
   milestone it precedes. Canonical table: [Docs/Architecture.md §10](Docs/Architecture.md).
-  **Blocks A and B both done** (video coding fundamentals; FFmpeg's architecture
-  + Unreal's build system and module model). Block C (Media Framework) isn't
-  due until M2.
+  **Blocks A, B and C all done** — video coding fundamentals; FFmpeg's
+  architecture + Unreal's build system and module model; and the full Media
+  Framework interface set (`IMediaPlayer`, `IMediaPlayerFactory`,
+  `IMediaEventSink`, `IMediaSamples`/`FMediaSamples`, `IMediaTextureSample`)
+  across Sessions 6–7. Block D isn't due until M3.
 - **Repo-prep complete.** `.gitignore`/`.gitattributes` fixed (committed
   `d0fd929`). UE project `IPStreamMediaDemo` created at the repo root; the
   `IPStreamMedia`/`IPStreamMediaFactory` plugin skeleton exists and compiles.
@@ -53,13 +57,62 @@ multiple runs, both success and failure paths.
   coded interrupt-callback deadline of `+6.0` almost exactly, empirically
   confirming that mechanism works as designed. PIE stopped cleanly, no hang,
   no crash, across multiple runs of both the success and failure paths.
-- **Next action:** M1 is throwaway per D8 — delete the spike code, run
-  Block C (Media Framework concept prep, not yet started), then begin M2,
-  the real `IMediaPlayer` module. Then commit/push the M1 work first;
-  uncommitted work includes four regenerated binary `.lib` files via LFS, so
-  run the credential-pattern check first. (Two loose local files,
-  `GoodStream.txt`/`BadStream.txt`, are flagged for deletion in the session
-  log — not caught by the existing `.gitignore` pattern.)
+- **M1's throwaway code is still in the project, deliberately.** Per D8 it
+  gets deleted, but that's deferred until M2 has something working to replace
+  it. Still present: `IPStreamSpike.h`/`.cpp`, `Content/BP_SpikePlane.uasset`
+  (placed inside `Content/Maps/Main.umap` — deleting it outside the editor
+  leaves a dangling map reference), `M_SpikeTest`/`MPC_SpikeTest`, and
+  `WBP_Timer`. **Do not touch any of these until M2 has a replacement.**
+
+- **M2 IS IN PROGRESS, AND ITS DESIGN IS BEING *DERIVED*, NOT DELIVERED.**
+  This changed mid-M2 (Session 8) and governs everything from here — see
+  "How we work together" below and
+  [Docs/M2DesignDerivation.md](Docs/M2DesignDerivation.md). Three design
+  questions settled so far, each by Sanjyot reading engine source himself:
+  **Q1 → D14** (player *owns* a `TUniquePtr<FMediaSamples>`; implements the
+  other four sub-interfaces directly), **Q2 → D6's rationale corrected**
+  (a factory is metadata about a player, queryable where the player can't
+  load; factory belongs at `PostEngineInit`, not `PostConfigInit`), and
+  **Q3** (the `.Build.cs` dependency model — `Media` is headers-only because
+  its public surface is pure-virtual; `MediaUtils` needs real linkage).
+  `.uplugin` and both `.Build.cs` files are updated accordingly.
+
+- **M2 STEP 1 PASSES — the Media Framework chain is proven end to end, with no
+  FFmpeg in it.** Factory registers at `PostEngineInit`; `IP Stream Media` is
+  selectable as the player override on a `UMediaSource`; our factory beats
+  WmfMedia for `rtsp`; the player is constructed via
+  `IIPStreamMediaModule::CreatePlayer`; `MediaOpened` reaches Blueprint in PIE;
+  `Player Closed` on stop. Five files, all typed in by Sanjyot. Call-by-call
+  reasoning in [Docs/M2PlayerWalkthrough.md](Docs/M2PlayerWalkthrough.md).
+  GUID in use (Sanjyot's own, identical in factory and player as required):
+  `FGuid(0x6bd90b53, 0xbe5340cd, 0xab90c371, 0x7f1b284a)`.
+
+- **Credential hazard, hit twice now — read before creating any test asset.**
+  A `UStreamMediaSource` stores its URL as a default property **inside the
+  binary `.uasset`**, and `Content/` is tracked — so committing one leaks the
+  camera password with *nothing readable in the diff*, and the `*.txt` ignore
+  rule does not apply. **The remedy is to remove the secret, not hide the
+  file:** clear the URL field to a dummy and re-save. That keeps
+  `Content/MediaAssets/` committable — the player-override setting is a
+  separate field, and it's the part M6's demo wants. **On any credential
+  finding: alert Sanjyot and stop. He chooses the remedy — do not gitignore,
+  delete, or edit anything unilaterally.** The camera password **contains an
+  `@`**, so any check or redaction cutting at the *first* `@` is wrong: search
+  the authority section (before the first `/`) and take the *last* `@`, as
+  `RedactUrlCredentials` does. State the detector pattern when reporting a scan
+  as clean — a verdict is only as good as the pattern behind it.
+
+- **Next action: M2 step 2** — FFmpeg demux/decode on a worker thread, behind
+  the `Open()` that already works. Flagged for it: `~FIPStreamPlayer` stops
+  being empty (a thread must be shut down there), and `CreatePlayer` may want
+  an `#if WITH_FFMPEG` guard so a failed DLL load returns `nullptr` rather than
+  a player that can never decode. Then step 3 (samples into `FMediaSamples`,
+  enable `AlwaysPullNewestVideoFrame`) and step 4 (`UMediaTexture` in PIE).
+  **All of step 1 is uncommitted.**
+
+- **Still-open thread from Block C:** which `EMediaEvent`s actually fire
+  around a reconnect. Flagged, not resolved — an M4 concern, doesn't block
+  step 1.
 - Phase 1 = RTSP only. SRT is Phase 2, RTMP is Phase 3.
 
 ## Key decisions made so far
@@ -73,13 +126,15 @@ Full rationale in [Docs/Architecture.md §12](Docs/Architecture.md). Summary:
 | D3 | FFmpeg, LGPL (pinned build is v3, not the default 2.1 — see Architecture §4), **shared DLLs, dynamic linking. Never static, never `--enable-gpl`** |
 | D4 | Third-party binaries committed via Git LFS, not fetched by a setup script |
 | D5 | Plugin's own code is MIT |
-| D6 | Two modules: runtime (`IPStreamMedia`) + factory (`IPStreamMediaFactory`) |
+| D6 | Two modules: runtime (`IPStreamMedia`) + factory (`IPStreamMediaFactory`). A factory is **metadata about a player**, queryable where the player can't load — *not* about registration ordering (rationale corrected 2026-09-12) |
 | D7 | FFmpeg wrapped as `ModuleType.External` |
 | D8 | Week-1 spike is **throwaway** — no Media Framework in it at all |
 | D9 | Sample timing: latest-frame-wins first, behind a policy interface |
 | D10 | Reconnect is transparent, inside the session, with backoff |
 | D11 | No latency target — a documented, reproducible method and whatever number falls out |
 | D12 | M3 (GPU colour conversion) is the designated **cuttable** milestone |
+| D13 | D9's latest-frame-wins built on `IMediaPlayer`'s V2 timing model (`FMediaTimeStamp`/`SequenceIndex`), not V1 |
+| D14 | `FIPStreamPlayer` **owns** a `TUniquePtr<FMediaSamples>`; implements `IMediaCache`/`IMediaControls`/`IMediaTracks`/`IMediaView` directly |
 
 **Do not re-litigate these** unless there is new technical evidence.
 
@@ -206,6 +261,45 @@ template for the next one:
 - Sanjyot adds comments to the code himself, in his own words, once he
   understands a piece. Suggest comment wording in chat; don't write comments
   into source files unless he asks.
+
+### Design derivation — hard rule, from M2 onward
+
+**Never report a design conclusion drawn from reading engine or reference-plugin
+source. Hand over the evidence and let Sanjyot read it.** Established Session 8,
+after M2 opened with ~15 engine file reads compressed into ~6 sentences of
+conclusion followed by code.
+
+**Why:** what that transmits is **precedent, not reasoning**. "Electra composes
+`FMediaSamples`, so we compose `FMediaSamples`" is exactly the answer that
+collapses under the interview follow-up — *"why does Electra do it that way?"* —
+and he'd be defending a choice he never made. M1 was throwaway per D8 so
+silver-platter delivery was survivable; **everything from M2 on is permanent.**
+
+**The cycle:**
+
+1. State the **question**, with no answer attached.
+2. Give **exact file paths and line ranges**, plus the contrast or tension to
+   look for — not a summary of them. Engine source is at `F:\EpicGames\UE_5.3`.
+   He reads in his own editor, where he can navigate and jump to definitions.
+3. **He answers first.** Do not pre-state the conclusion and have him confirm it.
+4. Correct misreadings, fill gaps, settle it together.
+5. Record question + evidence + decision + **the alternative that lost** (and
+   the condition that would reopen it) in
+   [Docs/M2DesignDerivation.md](Docs/M2DesignDerivation.md).
+
+**Be selective or this burns the schedule.** Apply it to decisions that are
+expensive to unwind. Do **not** apply it to stub return values, boilerplate
+overrides, or anything one-line reversible.
+
+**"I don't know why" is preferred over a confident post-hoc rationalisation of
+engine convention.** Shipped engine code sometimes diverges for historical
+reasons, and sometimes it is simply worse than what we'd write — Q3 found a
+relative-path `#include` in `WmfMediaFactoryModule.cpp` that we deliberately do
+not copy. Engine precedent is evidence of what works, not proof of what's best.
+
+**This has already caught two real errors in one session** — D6's recorded
+rationale was wrong, and a Glossary entry claimed one class conventionally
+inherits all five `IMediaPlayer` sub-interfaces when it's four.
 
 ### Code delivery — hard rule
 
