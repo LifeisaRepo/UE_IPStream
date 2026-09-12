@@ -298,7 +298,7 @@ The early phase in that table belongs to the **player**, where it is earned:
 genuine low-level hook in the sense `ELoadingPhase` means it.
 
 Full derivation, including the reading that settled it:
-[M2DesignDerivation.md](M2DesignDerivation.md) Q2. The `.Build.cs` dependency
+`M2DesignDerivation.md` Q2. The `.Build.cs` dependency
 model that follows from this split — why `Media` is headers-only while
 `MediaUtils` needs real linkage — is Q3 in the same doc.
 
@@ -513,7 +513,7 @@ repository — which is the one moment that matters.
 ### Delay loading has an unstated prerequisite: import library format
 
 **Discovered the hard way during M1 (2026-09-09) — full diagnosis in
-[M1DelayLoadRCA.md](M1DelayLoadRCA.md).**
+`M1DelayLoadRCA.md`.**
 
 `PublicDelayLoadDLLs` is necessary but **not sufficient**. MSVC's
 `/DELAYLOAD` can only transform imports that come from **MSVC

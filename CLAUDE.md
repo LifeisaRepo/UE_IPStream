@@ -36,17 +36,17 @@ failure paths.
 - **M1 — the spike — code complete, plugin loads in the editor.**
   `FFmpeg.Build.cs` (External module), `IPStreamMedia.Build.cs` wired to
   depend on it, `IPStreamMediaModule.cpp` doing delay-load DLL resolution at
-  startup, and `IPStreamM1Spike.cpp`/`.h` (the throwaway
+  startup, and `IPStreamSpike.cpp`/`.h` (the throwaway
   `UBlueprintFunctionLibrary`, `GrabOneFrame`) are all written and working.
   Every FFmpeg and UE call in the spike was verified against the actual
   headers on disk rather than recalled — see
-  [Docs/M1FFmpegWalkthrough.md](Docs/M1FFmpegWalkthrough.md) for the full
+  `M1FFmpegWalkthrough.md` for the full
   call-by-call reasoning.
 - **A delay-load failure blocked editor startup entirely and was root-caused
   and fixed** — BtbN's FFmpeg `.lib` files are GNU-format import libraries,
   which MSVC's `/DELAYLOAD` silently ignores; regenerated from the shipped
   `.def` files with `lib.exe`. Full write-up:
-  [Docs/M1DelayLoadRCA.md](Docs/M1DelayLoadRCA.md). **If the FFmpeg pin is
+  `M1DelayLoadRCA.md`. **If the FFmpeg pin is
   ever re-downloaded, this must be repeated** — see
   `ThirdParty/FFmpeg/NOTICE.md`.
 - **All three M1 pass criteria met, measured not eyeballed.** A `Tick`-based
@@ -67,7 +67,7 @@ failure paths.
 - **M2 IS IN PROGRESS, AND ITS DESIGN IS BEING *DERIVED*, NOT DELIVERED.**
   This changed mid-M2 (Session 8) and governs everything from here — see
   "How we work together" below and
-  [Docs/M2DesignDerivation.md](Docs/M2DesignDerivation.md). Three design
+  `M2DesignDerivation.md`. Three design
   questions settled so far, each by Sanjyot reading engine source himself:
   **Q1 → D14** (player *owns* a `TUniquePtr<FMediaSamples>`; implements the
   other four sub-interfaces directly), **Q2 → D6's rationale corrected**
@@ -83,7 +83,7 @@ failure paths.
   WmfMedia for `rtsp`; the player is constructed via
   `IIPStreamMediaModule::CreatePlayer`; `MediaOpened` reaches Blueprint in PIE;
   `Player Closed` on stop. Five files, all typed in by Sanjyot. Call-by-call
-  reasoning in [Docs/M2PlayerWalkthrough.md](Docs/M2PlayerWalkthrough.md).
+  reasoning in `M2PlayerWalkthrough.md`.
   GUID in use (Sanjyot's own, identical in factory and player as required):
   `FGuid(0x6bd90b53, 0xbe5340cd, 0xab90c371, 0x7f1b284a)`.
 
@@ -102,13 +102,30 @@ failure paths.
   `RedactUrlCredentials` does. State the detector pattern when reporting a scan
   as clean — a verdict is only as good as the pattern behind it.
 
-- **Next action: M2 step 2** — FFmpeg demux/decode on a worker thread, behind
-  the `Open()` that already works. Flagged for it: `~FIPStreamPlayer` stops
-  being empty (a thread must be shut down there), and `CreatePlayer` may want
-  an `#if WITH_FFMPEG` guard so a failed DLL load returns `nullptr` rather than
-  a player that can never decode. Then step 3 (samples into `FMediaSamples`,
-  enable `AlwaysPullNewestVideoFrame`) and step 4 (`UMediaTexture` in PIE).
-  **All of step 1 is uncommitted.**
+- **Step 1 is committed and pushed** — `8d73e99` ("IPStreamMedia Player working
+  skeleton"), `main` in sync with `origin/main`, working tree clean, full
+  credential scan of HEAD clean.
+
+- **Next action: derive Q4 BEFORE writing any step-2 code.** Agreed explicitly
+  at the end of Session 9, choosing "derive first" over "code first and derive
+  if something bites."
+  **Q4 — what runs the decode loop, and how is it shut down?** `FRunnable` +
+  `FRunnableThread`, a task, or something else? Where does the FFmpeg session
+  state live — on the player, or its own object? What exact ordering guarantees
+  `Close()` cannot return while the worker still holds an FFmpeg handle? M1
+  proved the cancellation mechanism (`AVIOInterruptCB`, measured 6.039s on an
+  unreachable URL) but never combined it with a thread somebody is waiting to
+  join. This is the failure class flagged in "Model per phase" below — it
+  surfaces as an editor hang, not a compile error.
+
+- **Then M2 step 2** — FFmpeg demux/decode on the worker thread, behind the
+  `Open()` that already works. The FFmpeg call sequence itself is **not new**:
+  it is M1's, documented call-by-call in `M1FFmpegWalkthrough.md`. Flagged for
+  it: `~FIPStreamPlayer` stops being empty (a thread must be shut down there),
+  and `CreatePlayer` may want an `#if WITH_FFMPEG` guard so a failed DLL load
+  returns `nullptr` rather than a player that can never decode. Then step 3
+  (samples into `FMediaSamples`, enable `AlwaysPullNewestVideoFrame`) and step 4
+  (`UMediaTexture` in PIE).
 
 - **Still-open thread from Block C:** which `EMediaEvent`s actually fire
   around a reconnect. Flagged, not resolved — an M4 concern, doesn't block
@@ -230,6 +247,23 @@ This is already the pattern in the session log; extend it to code.
 **Concept prep precedes each milestone.** Before starting a milestone, cover the
 concepts it depends on — no code until the ideas are in place.
 
+### Where the study notes live — LOCAL ONLY, not in the repo
+
+`M1FFmpegWalkthrough.md`, `M1DelayLoadRCA.md`, `M2DesignDerivation.md` and
+`M2PlayerWalkthrough.md` live in **`Docs/IssuesAndWalkthroughs/`, which is
+gitignored**. They are Sanjyot's private study notes and he has decided not to
+publish them — this repository is public.
+
+Consequences to respect:
+
+- **Never link to them with markdown links from a tracked file.** Every
+  reference in `CLAUDE.md`, `Docs/`, and the session log is a plain backticked
+  filename for exactly this reason; a link would dangle for anyone reading the
+  repo on GitHub.
+- **They are not backed up by git.** Treat them as the only copy.
+- Keep writing to them exactly as before — the ignore changes where they are
+  published, not whether they are maintained.
+
 ### Code walkthrough docs
 
 **For any code touching an unfamiliar API surface — a C-style library like
@@ -242,7 +276,7 @@ and compiled — call-by-call reasoning through the API sequence itself was
 the missing piece, and it had to be taught as its own, separate pass.
 
 **Format**, established by
-[Docs/M1FFmpegWalkthrough.md](Docs/M1FFmpegWalkthrough.md) — treat it as the
+`M1FFmpegWalkthrough.md` — treat it as the
 template for the next one:
 
 - One file per unfamiliar-API code unit, named `Docs/<Milestone><Subject>
@@ -285,7 +319,7 @@ silver-platter delivery was survivable; **everything from M2 on is permanent.**
 4. Correct misreadings, fill gaps, settle it together.
 5. Record question + evidence + decision + **the alternative that lost** (and
    the condition that would reopen it) in
-   [Docs/M2DesignDerivation.md](Docs/M2DesignDerivation.md).
+   `M2DesignDerivation.md`.
 
 **Be selective or this burns the schedule.** Apply it to decisions that are
 expensive to unwind. Do **not** apply it to stub return values, boilerplate

@@ -29,12 +29,16 @@ WmfMedia for `rtsp`; our player is constructed via
 `IIPStreamMediaModule::CreatePlayer`; `MediaOpened` reaches a Blueprint
 `Print String` in PIE; `Player Closed` on PIE stop. All five files written by
 Sanjyot from chat. Call-by-call reasoning in
-[Docs/M2PlayerWalkthrough.md](Docs/M2PlayerWalkthrough.md). Full detail in
+`M2PlayerWalkthrough.md`. Full detail in
 Session 9 below.
 
-**Everything for M2 step 1 is UNCOMMITTED** — source, the new walkthrough doc,
-the `.gitignore` change, and a Content reorganisation. M1 remains the last
-commit (`81714c5`, on `main` matching `origin/main`).
+**Committed and pushed** — `8d73e99` ("IPStreamMedia Player working skeleton"),
+`main` in sync with `origin/main`, working tree clean, full credential scan of
+HEAD clean.
+
+**Next action: derive Q4 (the threading model) BEFORE any step-2 code** —
+agreed explicitly at the end of Session 9. See the Q4 statement in
+`M2DesignDerivation.md` and Session 9 below.
 
 **Credential hazard, hit and resolved — read before creating any test asset.**
 A `UStreamMediaSource` stores its URL as a default property **inside the binary
@@ -132,7 +136,7 @@ the standard changes here. New method, in memory as
 `feedback_design_derivation.md`: state the question with no answer, hand over
 exact file paths and line ranges, **he reads and answers first**, then correct
 and settle together, then record question + evidence + decision + the
-alternative that lost in [Docs/M2DesignDerivation.md](Docs/M2DesignDerivation.md).
+alternative that lost in `M2DesignDerivation.md`.
 Deliberately **not** applied to stub values or one-line-reversible choices.
 "I don't know why" beats a confident rationalisation of engine convention.
 
@@ -191,7 +195,7 @@ the MSVC import libraries must be regenerated (see
 load.
 
 **Standing practice, in `CLAUDE.md`:** per-file "code walkthrough" docs (see
-[Docs/M1FFmpegWalkthrough.md](Docs/M1FFmpegWalkthrough.md), the template) —
+`M1FFmpegWalkthrough.md`, the template) —
 chunked, call-by-call, checked interactively — for any code touching an
 unfamiliar API surface. See Session 4 below for why this became a rule
 rather than a one-off.
@@ -933,7 +937,7 @@ speculative defensiveness. `ShutdownModule` frees the handles in reverse
 order. All four `FPlatformProcess`/`IPluginManager` signatures verified
 against `GenericPlatformProcess.h`/`Interfaces/IPluginManager.h` on disk.
 
-### `IPStreamM1Spike.h`/`.cpp` written — the actual throwaway spike
+### `IPStreamSpike.h`/`.cpp` written — the actual throwaway spike
 
 One `UBlueprintFunctionLibrary`, one function:
 `GrabOneFrame(const FString& RtspUrl)`, synchronous and blocking by design
@@ -975,8 +979,8 @@ specifically about UE Media Framework). Considered and explicitly rejected
 switching to Opus for this reason; stayed on Sonnet.
 
 **Fix, agreed and executed:** a dedicated walkthrough doc,
-[Docs/M1FFmpegWalkthrough.md](Docs/M1FFmpegWalkthrough.md), covering the
-entire `IPStreamM1Spike.cpp` FFmpeg sequence in eight chunks (setup/
+`M1FFmpegWalkthrough.md`, covering the
+entire `IPStreamSpike.cpp` FFmpeg sequence in eight chunks (setup/
 interrupt-callback, opening the connection, finding the video stream,
 opening the decoder, the decode loop, cleanup, the swscale conversion, the
 texture upload), each explaining what the call's job is, why this call and
@@ -1018,9 +1022,9 @@ programmer generally.
 `Plugins/IPStreamMedia/Source/ThirdParty/FFmpeg/FFmpeg.Build.cs` (new),
 `Plugins/IPStreamMedia/Source/IPStreamMedia/IPStreamMedia.Build.cs`,
 `Plugins/IPStreamMedia/Source/IPStreamMedia/Private/IPStreamMediaModule.cpp`,
-`Plugins/IPStreamMedia/Source/IPStreamMedia/Private/IPStreamM1Spike.h` (new),
-`Plugins/IPStreamMedia/Source/IPStreamMedia/Private/IPStreamM1Spike.cpp`
-(new), `Docs/M1FFmpegWalkthrough.md` (new), `Docs/Architecture.md` (§5
+`Plugins/IPStreamMedia/Source/IPStreamMedia/Private/IPStreamSpike.h` (new),
+`Plugins/IPStreamMedia/Source/IPStreamMedia/Private/IPStreamSpike.cpp`
+(new), `M1FFmpegWalkthrough.md` (new), `Docs/Architecture.md` (§5
 module-tree correction, Block B status line corrected), `Docs/Glossary.md`
 (`IPluginManager`, translation unit, linkage entries), `CLAUDE.md` (new
 Code walkthrough docs subsection, Current status corrected), this file.
@@ -1067,7 +1071,7 @@ problem, never ran. The delay-load architecture (decided in Block B concept
 prep, weeks earlier) was correct and had simply never engaged.
 
 Full diagnosis, including the diagnostic path and the dead ends, in
-[Docs/M1DelayLoadRCA.md](Docs/M1DelayLoadRCA.md) — written as a base document
+`M1DelayLoadRCA.md` — written as a base document
 for a portfolio devlog.
 
 ### How it was found (condensed)
@@ -1123,7 +1127,7 @@ changing (~21 function pointers for the spike alone, growing).
 
 ### Documentation added
 
-- `Docs/M1DelayLoadRCA.md` (new) — full RCA, written to be rewritten as a
+- `M1DelayLoadRCA.md` (new) — full RCA, written to be rewritten as a
   devlog. Deliberately keeps the wrong turns and marks which claims are
   empirically demonstrated here vs. mechanism explanation.
 - `ThirdParty/FFmpeg/NOTICE.md` — new "Import libraries regenerated" section
@@ -1171,7 +1175,7 @@ next session by agreement.
 (regenerated), `Plugins/IPStreamMedia/ThirdParty/FFmpeg/NOTICE.md`,
 `Plugins/IPStreamMedia/IPStreamMedia.uplugin` (experiments reverted),
 `Plugins/IPStreamMedia/Source/ThirdParty/FFmpeg/FFmpeg.Build.cs` (debug
-scaffolding removed), `Docs/M1DelayLoadRCA.md` (new),
+scaffolding removed), `M1DelayLoadRCA.md` (new),
 `Docs/Architecture.md` (§9), `CLAUDE.md` (Current status), this file.
 
 ### M1 pass criterion closed out — measured, not eyeballed
@@ -1756,7 +1760,7 @@ type. Nothing is blocking it.
 
 ### Files updated
 
-`Docs/M2DesignDerivation.md` (**new** — Q1, Q2 and Q3 in full, the template for
+`M2DesignDerivation.md` (**new** — Q1, Q2 and Q3 in full, the template for
 every M2 design decision), `Docs/Architecture.md` (§5 "Why two modules"
 rewritten; D6 rationale corrected in §12; **D14 added**), `Docs/Glossary.md`
 (`IMediaPlayer` entry **corrected** — it claimed one class conventionally
@@ -1804,7 +1808,7 @@ GUID rather than using the one drafted for him —
 `FGuid(0x6bd90b53, 0xbe5340cd, 0xab90c371, 0x7f1b284a)`, identical in factory and
 player as required.
 
-Full call-by-call reasoning captured in **[Docs/M2PlayerWalkthrough.md](Docs/M2PlayerWalkthrough.md)**
+Full call-by-call reasoning captured in **`M2PlayerWalkthrough.md`**
 (new — the `M1FFmpegWalkthrough.md` template applied to M2). Covers: why two
 dispatch mechanisms exist at all, the `"Windows"`-not-`"Win64"` trap,
 `LoadModulePtr` vs `GetModulePtr`, the destructor/incomplete-type gotcha,
@@ -1875,20 +1879,47 @@ nothing. **`IPStreamSpike.h`/`.cpp` deliberately still present** — step 1 rend
 no picture, so M2 has not yet replaced what the spike demonstrates. D8's deletion
 still waits on step 3/4.
 
-**Next action:** M2 **step 2** — FFmpeg demux/decode on a worker thread, behind
-the `Open()` that now demonstrably works. Two things already flagged for it:
-the destructor stops being empty (a thread must be shut down there), and
-`CreatePlayer` may want an `#if WITH_FFMPEG` guard so a failed DLL load returns
-`nullptr` rather than a player that can never decode. Step 3 then pushes samples
-into `FMediaSamples` and turns on `AlwaysPullNewestVideoFrame`; step 4 points a
-`UMediaTexture` at it.
+**Next action — agreed at session end: derive Q4 BEFORE writing step-2 code.**
+Sanjyot was offered "derive first" vs "code first and derive if something bites"
+and chose to derive, on the grounds that this is the expensive-to-unwind kind of
+decision.
 
-**Uncommitted at session end:** all of M2 step 1's source, the new walkthrough
-doc, the `.gitignore` change, and the Content reorganisation. Nothing pushed.
+**Q4 — what runs the decode loop, and how is it shut down?** `FRunnable` +
+`FRunnableThread`, a task, or something else? Where does the FFmpeg session state
+live — on the player, or in its own object? And what exact ordering guarantees
+`Close()` cannot return while the worker still holds an FFmpeg handle? M1 already
+proved the cancellation mechanism (`AVIOInterruptCB`, measured 6.039s against an
+unreachable URL) but it has never been combined with a thread somebody is waiting
+to join. `CLAUDE.md` singles this class out — *"shutdown deadlocks against
+blocking network reads... easy to 'fix' in a way that only relocates them"* — and
+it fails as an editor hang, not a compile error.
+
+**Then M2 step 2** — FFmpeg demux/decode on the worker thread, behind the
+`Open()` that now demonstrably works. The FFmpeg call sequence itself is **not
+new**: it is M1's, documented call-by-call in `M1FFmpegWalkthrough.md`. Two
+things already flagged: `~FIPStreamPlayer` stops being empty (a thread must be
+shut down there), and `CreatePlayer` may want an `#if WITH_FFMPEG` guard so a
+failed DLL load returns `nullptr` rather than a player that can never decode.
+Step 3 then pushes samples into `FMediaSamples` and turns on
+`AlwaysPullNewestVideoFrame`; step 4 points a `UMediaTexture` at it.
+
+**Committed and pushed** as `8d73e99` ("IPStreamMedia Player working skeleton"),
+`main` confirmed in sync with `origin/main`, working tree empty. A full
+credential scan of every tracked file at HEAD came back clean — the only hits
+are documented placeholders (`rtsp://admin:***@…`, `rtsp://user:pass@host/…`,
+the `rtsp://YourStreamHere` dummy, a public `freja.hiof.no` test stream), the
+`TEXT("://***@")` format string inside `RedactUrlCredentials` itself, and binary
+noise within the FFmpeg DLLs.
+
+**Flagged to Sanjyot, his call, left as-is:** the camera's LAN IP
+`192.168.0.131` appears in plaintext in `CLAUDE.md`, `Docs/TestSource.md` and
+this file. RFC 1918 private space, not routable from the internet, and it is the
+project's own established convention (`TestSource.md` redacts credentials but
+keeps the host).
 
 ### Files updated
 
-**New:** `Docs/M2PlayerWalkthrough.md`. **Modified:** `.gitignore`
+**New:** `M2PlayerWalkthrough.md`. **Modified:** `.gitignore`
 (`Content/MediaAssets/`), `Docs/Glossary.md` (§6 `GetPlayerPluginGUID`, `Facade`;
 §7 `FString`/`FName`/`FText`, `LOCTEXT`/`LOCTEXT_NAMESPACE`), `CLAUDE.md`, this
 file. Memory: **new** `feedback_kiss_answers.md` — "KISS" in a question means

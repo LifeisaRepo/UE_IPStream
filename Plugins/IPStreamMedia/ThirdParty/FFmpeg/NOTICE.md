@@ -62,7 +62,7 @@ delay loading (the DLLs live in this folder rather than on the system path,
 and are loaded explicitly at module startup), so the result was a plugin
 that compiled and linked perfectly and then failed at editor startup with
 `Missing import: avutil-61.dll`. Full diagnosis:
-[`Docs/M1DelayLoadRCA.md`](../../../../Docs/M1DelayLoadRCA.md).
+[`M1DelayLoadRCA.md`](../../../`M1DelayLoadRCA.md`).
 
 The four import libraries this plugin links were therefore regenerated from
 the `.def` files shipped in `lib/Win64/`, using MSVC's `lib.exe` (run from a
