@@ -251,11 +251,56 @@ physically live, only where the `.Build.cs` sits.
 
 ### Why two modules
 
-The factory module loads at **`PostConfigInit`** so the player is registered with
-`IMediaModule` before anything can attempt to open a URL; the heavier runtime
-module loads later. This mirrors `WmfMedia` / `WmfMediaFactory` exactly. It is
-also the difference between "works in the editor, mysteriously does not in a
-packaged build" and not.
+**A factory is metadata about a player — queryable from anywhere, including
+platforms where the player itself can never load.** That, not load ordering, is
+what the split is for.
+
+The evidence is `UBaseMediaSource::PreSave`
+(`Runtime/MediaAssets/Private/Assets/BaseMediaSource.cpp:43-53`), which runs in
+the **editor** while saving a `UMediaSource` **for a target platform other than
+the one the editor is running on** — cooking an iOS build from a Windows PC. For
+the details panel to offer *"on iOS, use AvfMedia"*, the Windows editor must be
+able to enumerate a factory for a player that cannot load on Windows. Hence
+`AvfMediaFactory` is compiled for Win64 while `AvfMedia` is not.
+`FMediaPlayerFacade` confirms the same expectation from the other direction: it
+filters with `Factory->SupportsPlatform(RunningPlatformName)`
+(`MediaPlayerFacade.cpp:214`), which is only meaningful in a system that assumes
+registered factories for platforms you are not on.
+
+So the division of labour is: the **player** is the heavy, platform-bound,
+third-party-linked thing; the **factory** is a light description of it that
+travels where the player can't.
+
+**Loading phases — corrected 2026-09-12.** An earlier version of this section
+claimed the factory loads at `PostConfigInit` to win a registration race, and
+that this mirrored `WmfMedia`. Both halves were wrong. Every shipped media
+backend does the opposite:
+
+| Plugin | Player module | Factory module |
+|---|---|---|
+| WmfMedia | `PostConfigInit` | `PostEngineInit` |
+| ElectraPlayer | `PreLoadingScreen` | `PostEngineInit` |
+| AvfMedia | `PreLoadingScreen` | `PostEngineInit` |
+| AndroidMedia | `PreLoadingScreen` | `PostEngineInit` |
+
+There is no race to win. The only requirement is *registered before someone opens
+a media URL*, and the earliest that can happen is a `UMediaPlayer` — a `UObject`
+asset driven from Blueprint or gameplay — which is vastly later than
+`PostEngineInit`. Loading a factory at `PostConfigInit` buys nothing and costs
+something: it drags the whole `Media` module up the startup order, and
+editor-facing calls in a factory's `StartupModule` silently no-op that early.
+`WmfMediaFactoryModule.cpp:186-195` is the proof — its `ISettingsModule` lookup
+returns `nullptr` before the engine is up, and its settings page would simply
+never appear, with no error.
+
+The early phase in that table belongs to the **player**, where it is earned:
+`WmfMedia` initializes Windows Media Foundation, a platform subsystem. That is a
+genuine low-level hook in the sense `ELoadingPhase` means it.
+
+Full derivation, including the reading that settled it:
+[M2DesignDerivation.md](M2DesignDerivation.md) Q2. The `.Build.cs` dependency
+model that follows from this split — why `Media` is headers-only while
+`MediaUtils` needs real linkage — is Q3 in the same doc.
 
 ### Why FFmpeg is an External module
 
@@ -340,6 +385,67 @@ meaningful start time.
 a surveillance monitor actually wants — but **put it behind a policy interface**
 so Phase 2 can add a real jitter buffer and publish a measured side-by-side
 comparison. The improvement is then demonstrable rather than asserted.
+
+### D13: implement latest-frame-wins on `IMediaPlayer`'s V2 timing model, not V1
+
+Decided in the Block C concept-prep session (2026-09-10), after reading
+`MediaPlayerFacade.cpp` and three shipped 5.3 players directly rather than
+assuming. `IMediaPlayer::EFeatureFlag::UsePlaybackTimingV2` gates an entire
+alternate timing model (`FMediaTimeStamp`, sequence-indexed) alongside the
+original `FTimespan`-based one ("V1", the default when the flag isn't
+overridden).
+
+**The evidence, not just the theory:**
+
+| Player | Timing model |
+|---|---|
+| `RivermaxMediaPlayer` (SMPTE ST 2110 broadcast ingest — closest existing engine analog to this project) | V1, unmodified |
+| `SharedMemoryMediaPlayer` (nDisplay live frame source) | V1, unmodified |
+| `WmfMediaPlayer` (newer internal implementation) | V2 |
+| `ElectraPlayerPlugin` (Epic's flagship — HLS/DASH, full AV sync) | V2, unconditionally |
+
+So the two existing "live frame source, no seek, no meaningful duration"
+players both stay on V1 — the naive read would be "V1 is right for us too."
+Three things changed that:
+
+1. **`FMediaSamples`/`FMediaTextureSampleQueue` — the queue this project
+   already committed to using (§6) — already implements V2's sample-selection
+   algorithm** (`FetchBestSampleForTimeRange`, best-overlap-then-newest). V2
+   doesn't cost a hand-written selection algorithm on top of the engine
+   dependency already taken.
+2. **`FMediaTimeStamp::SequenceIndex` exists, by its own header comment, to
+   mark "an event that causes time to no longer be monotonic — e.g. seek or
+   loop."** D10's transparent in-session reconnect is exactly that class of
+   event: a fresh RTSP session means FFmpeg's PTS restarts near zero while
+   the player session stays open. V1 has no field for this — a player has to
+   detect the reconnect itself and manually rebase every subsequent
+   timestamp by an accumulating offset, with a fresh chance to get the
+   offset wrong on every reconnect. V2 replaces that with incrementing one
+   integer per reconnect; the comparison operator (`Seq` compared before
+   `Time`) then makes "the new session's frame 0.04s counts as later than
+   the old session's frame 47.20s" correct automatically.
+3. Epic's own *new* investment (Electra unconditionally, WmfMedia's newer
+   path) is V2. No explicit deprecation of V1 was found — that claim would
+   outrun the evidence — but it's a reasonable signal for where engine
+   investment is headed across future UE versions.
+
+**The alternative that lost:** V1 + hand-rolled latest-frame-wins (drop
+older samples before/while adding to the queue, rebase PTS across
+reconnects manually). Simpler at the surface and precedented by
+`RivermaxMediaPlayer`/`SharedMemoryMediaPlayer`, but it reinvents, by hand,
+a discontinuity-handling job `FMediaTimeStamp` already has a field for — and
+this project has an actual discontinuity source (D10 reconnects) that V1
+would hit in practice, not hypothetically.
+
+**Consequence for M2:** `FIPStreamPlayer::GetPlayerFeatureFlag` returns true
+for `UsePlaybackTimingV2` (and `PlayerUsesInternalFlushOnSeek`, since seek is
+unsupported and the player should own that fact rather than let the facade
+issue seek-flush calls that don't apply). `AlwaysPullNewestVideoFrame` is the
+concrete mechanism for the latest-frame-wins policy interface from D9 — the
+policy interface itself still exists (Phase 2's jitter buffer replaces the
+feature-flag value and the sample-timestamping logic, not the facade
+contract). On every detected reconnect, bump the sequence index passed to
+`FIPStreamTextureSample`'s `FMediaTimeStamp` rather than rebasing PTS.
 
 ### Colour conversion — YUV420P to NV12 to RGB
 
@@ -624,13 +730,15 @@ Settled. Reopen only on new technical evidence.
 | D3 | FFmpeg, LGPL, shared DLLs, dynamic linking | §4 |
 | D4 | Binaries committed via LFS, not fetched by script | LFS present anyway; clone-and-run is the point |
 | D5 | Plugin code MIT | Dynamic linking keeps LGPL out of it |
-| D6 | Two modules: runtime + factory | Engine convention; `PostConfigInit` registration ordering |
+| D6 | Two modules: runtime + factory | A factory is *metadata about a player*, queryable where the player can't load (editor cooking for another platform). **Rationale corrected 2026-09-12** — not registration ordering; factory loads `PostEngineInit`, player earlier. §5, and `M2DesignDerivation.md` Q2 |
 | D7 | FFmpeg as `ModuleType.External` | Isolates the most commonly botched integration surface |
 | D8 | Spike is throwaway, no Media Framework | Isolates the genuinely unknown risks |
 | D9 | Latest-frame-wins first, behind a policy interface | Minimum latency now; measurable improvement in Phase 2 |
 | D10 | Reconnect is transparent, inside the session | Survives network hiccups on camera; key differentiator |
 | D11 | No latency target, only a documented method | Improvement over time beats a single unverifiable number |
 | D12 | M3 (GPU conversion) is the designated cuttable milestone | Schedule insurance against shipping nothing |
+| D13 | D9's latest-frame-wins built on `IMediaPlayer`'s V2 timing model, not V1 | §7 — `FMediaSamples` already implements V2 sample selection; `SequenceIndex` fits D10 reconnects natively; Electra's own precedent |
+| D14 | `FIPStreamPlayer` **owns** a `TUniquePtr<FMediaSamples>`; implements the other four sub-interfaces directly | RTSP frames arrive sequentially, and FIFO is the right structure for sequentially-arriving data. Nothing in the engine inherits `FMediaSamples` — it is a component, not a base class. Reopens only if a Phase 2 D9 policy can't be expressed as queue configuration. `M2DesignDerivation.md` Q1 |
 
 ---
 

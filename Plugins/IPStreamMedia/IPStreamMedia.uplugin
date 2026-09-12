@@ -16,15 +16,15 @@
 	"Installed": false,
 	"Modules": [
 		{
-			"Name": "IPStreamMediaFactory",
-			"Type": "Runtime",
-			"LoadingPhase": "PostConfigInit",
+			"Name": "IPStreamMedia",
+			"Type": "RuntimeNoCommandlet",
+			"LoadingPhase": "Default",
 			"PlatformAllowList": [ "Win64" ]
 		},
 		{
-			"Name": "IPStreamMedia",
-			"Type": "Runtime",
-			"LoadingPhase": "Default",
+			"Name": "IPStreamMediaFactory",
+			"Type": "RuntimeNoCommandlet",
+			"LoadingPhase": "PostEngineInit",
 			"PlatformAllowList": [ "Win64" ]
 		}
 	]

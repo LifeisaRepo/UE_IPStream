@@ -3,6 +3,10 @@
 #pragma once
 
 #include "Modules/ModuleInterface.h"
+#include "Templates/SharedPointer.h"
+
+class IMediaEventSink;
+class IMediaPlayer;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogIPStreamMedia, Log, All);
 
@@ -11,5 +15,12 @@ DECLARE_LOG_CATEGORY_EXTERN(LogIPStreamMedia, Log, All);
  */
 class IIPStreamMediaModule : public IModuleInterface
 {
-	// Empty for now, will be extended in M2
+public:
+	/**
+	* Creates an IP stream media player
+	* 
+	* @param EventSink The object that will receive the player's events.
+	* @return A new media player, or nullptr if a player couldn't be created.
+	*/
+	virtual TSharedPtr<IMediaPlayer, ESPMode::ThreadSafe> CreatePlayer(IMediaEventSink& EventSink) = 0;
 };

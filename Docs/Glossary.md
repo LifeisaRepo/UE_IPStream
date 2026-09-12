@@ -274,6 +274,31 @@ factory module (`IPStreamMediaFactory`) can carry different dependency lists —
 FFmpeg is a private dependency of the runtime module only, so nothing that
 merely links against the plugin needs to know FFmpeg exists.
 
+**`PrivateIncludePathModuleNames`** — UBT's own words: *"modules with header
+files that our module's private code files needs access to, but we don't need to
+'import' or link against."* The operative word is **import** — that's the linker
+step. It grants header access with **no linkage at all**. *Why it matters here:*
+the `Media` module is listed this way rather than as a dependency, because its
+entire public surface is pure-virtual interfaces, enums and header-defined types
+— 22 public headers with **one** `MEDIA_API` between them, and that one is a
+debug string helper. There is literally nothing to link against. Contrast
+`MediaUtils` (164 export sites, concrete classes like `FMediaSamples`), which is
+a normal `PrivateDependencyModuleNames` entry. See `M2DesignDerivation.md` Q3.
+
+**`DynamicallyLoadedModuleNames`** — *"Additional modules this module may require
+at run-time."* **It does not load anything** — that's done explicitly by your own
+code via `FModuleManager::LoadModulePtr`; delete the entry and the call still
+compiles and works in the editor. What it actually buys: (1) **staging** — since
+nothing links against the module, UBT would otherwise have no reason to believe
+you need it, and a packaged build could omit it (the "works in editor, missing
+when packaged" class of bug, cf. M5); (2) **build ordering with no import-table
+entry** — a real link dependency puts your DLL in Windows' import table for that
+module, so the loader pulls it in whenever yours loads, regardless of loading
+phase. *Why it matters here:* that second property is what keeps
+`IPStreamMediaFactory` genuinely decoupled from `IPStreamMedia` — the player
+module loads only when `CreatePlayer` asks for it. Linking would quietly undo
+D6.
+
 **`.Build.cs`** — the C# file declaring a module: include paths, dependencies,
 libraries to link, files to stage. *This is where third-party integration lives
 and where it usually goes wrong.*
@@ -285,6 +310,24 @@ nothing to compile here, it only describes where somebody else's binaries live."
 **Import library (`.lib`) vs DLL (`.dll`)** — on Windows, the `.lib` is a small
 stub the linker uses at build time to resolve symbol names; the `.dll` holds the
 actual code and is loaded at runtime. You need both, and they must match.
+
+**Module API macro (`MEDIAUTILS_API`, `IPSTREAMMEDIA_API`, …)** — UBT generates
+one of these per module. It expands to `__declspec(dllexport)` while compiling
+**that** module ("I publish this symbol") and `__declspec(dllimport)` while
+compiling **anything else** ("expect to find it in that module's DLL") — same
+token in the same header, opposite meaning depending on who is compiling.
+Without it, a symbol in one module's DLL is invisible to every other module.
+*When you need it:* on a concrete function whose body lives in a `.cpp`. *When
+you don't:* on anything defined **inline in a header** (the consuming compiler
+generates that code into your own module — nothing crosses a DLL boundary), and
+on **pure virtuals called through a base-class pointer** (the call resolves via
+the object's vtable at runtime, so the linker never needs the symbol's address).
+`MediaSamples.h` follows the first rule exactly — compare the `Fetch*`
+declarations, which carry the macro, against inline `AddVideo`, which doesn't.
+`IWmfMediaModule.h` demonstrates the second: no export macro anywhere, because
+everything on it is pure virtual or inline. *Why it matters here:*
+`IIPStreamMediaModule::CreatePlayer` needs no macro despite being called from
+`IPStreamMediaFactory` across a DLL boundary.
 
 **Delay loading / `PublicDelayLoadDLLs`** — normally Windows loads every linked
 DLL at process start, and a missing one is instant death before any of your code
@@ -308,11 +351,29 @@ files stay as loose files on disk. **A DLL must be NonUFS**
 DLL loader needs a real file handle on real disk — it has no concept of a
 `.pak` archive at all.
 
-**Loading phase** — when a module is loaded during startup.
-**`PostConfigInit`** is very early, right after config files are read.
-*Why it matters here:* the player factory must be registered before anything can
-try to open a media URL, so the factory module loads at `PostConfigInit` while
-the heavier runtime module loads later.
+**Loading phase (`ELoadingPhase`)** — when a module is loaded during startup,
+declared per-module in the `.uplugin`. **`PostConfigInit`** is very early — the
+enum's own comment says *"before the engine is fully initialized... Necessary
+only for very low-level hooks"*, meaning platform file systems, compression
+formats, memory hooks. **`Default`** is during engine init, after game modules.
+**`PostEngineInit`** is after the engine is up. *Why it matters here:* **the
+factory belongs at `PostEngineInit`, not `PostConfigInit`** — every shipped
+media backend does it that way, and there is no registration race to win, since
+the earliest a factory can be consulted is a `UMediaPlayer` opening a URL from
+gameplay. An earlier version of this entry (and D6) claimed the opposite;
+corrected 2026-09-12, see `M2DesignDerivation.md` Q2. The early phase belongs to
+the **player** module when it has a genuine platform subsystem to initialize —
+which `WmfMedia` does and ours does not.
+
+**`EHostType`** — the *other* per-module `.uplugin` field, orthogonal to loading
+phase: which kinds of target load this module at all. `Runtime` = all targets
+except programs; **`RuntimeNoCommandlet`** = the same, minus the editor running
+commandlets (what media plugins use); `Editor` = only when the editor starts up.
+*Why it matters here:* a module entry carries exactly **one** `Type` and **one**
+`PlatformAllowList`, so shipped media plugins declare their factory **twice** —
+an `Editor` entry with no platform list, plus a `RuntimeNoCommandlet` entry with
+one — because those are two different rules and one entry can't express both.
+Win64-only projects like this one need only a single entry.
 
 **`.uplugin`** — the plugin's JSON manifest: name, modules, loading phases,
 platform list.
@@ -357,10 +418,45 @@ plugged into a material.
 
 **`IMediaPlayer`** — the core interface a backend implements. Exposes sub-interfaces
 via `GetControls()`, `GetTracks()`, `GetSamples()`, `GetView()`, `GetCache()`.
-Conventionally one class inherits all of them and returns `*this`.
+Conventionally one class inherits **four of the five** — `IMediaCache`,
+`IMediaControls`, `IMediaTracks`, `IMediaView` — and returns `*this` from each,
+because those are *behavioural* interfaces: accessors over state the player
+already keeps. **`GetSamples()` is the exception** — it conventionally returns a
+separately-owned `FMediaSamples` member, because that one is a *container*, not
+behaviour. See `M2DesignDerivation.md` Q1 for the evidence and the
+`ImgMediaPlayer`/`ElectraPlayerPlugin` contrast that settles it.
 
 **`IMediaPlayerFactory`** — declares which URL schemes a backend handles (`rtsp`
 here) and constructs players on demand. Registered with `IMediaModule` at startup.
+
+**`GetPlayerPluginGUID`** — a 128-bit identity appearing on **both**
+`IMediaPlayerFactory` and `IMediaPlayer`, because it is the **join key between a
+player instance and the factory that made it**. The facade holds an
+`IMediaPlayer*`, asks it for its GUID, and looks the factory up by that value
+(`MediaPlayerFacade.cpp:404`, resolved by linear scan in
+`MediaModule.cpp:79-83`). **Both must return the identical literal** — line 404
+dereferences the lookup result with no null check, so a mismatch is a crash, not
+a warning. The value is arbitrary (nothing is encoded in it); generate it once
+with `[guid]::NewGuid()` and regroup the 32 hex digits into the four `uint32`s
+`FGuid` takes. **Never change it once shipped** —
+`BaseMediaSource.cpp:135` serialises it into `UMediaSource` assets, so altering
+it silently orphans every asset pointing at the player. Ours:
+`FGuid(0x7f1035ec, 0xbb724295, 0x8a3f6b76, 0xf5666420)`.
+
+**Facade (the general term)** — like the front of a building: a simple face
+placed in front of a complicated system, so callers deal only with the simple
+face. *Here:* Blueprint gets easy functions on `UMediaPlayer` (`OpenUrl`,
+`Play`, `Close`) while the awkward work — choosing a backend, creating it,
+ticking it, pulling frames, firing events — happens behind it. The full chain is
+`Blueprint → UMediaPlayer → FMediaPlayerFacade → FIPStreamPlayer (ours)`, so
+"the facade calls your player" means the third link calling the fourth.
+
+**`FMediaPlayerFacade`** — the engine-internal object that actually sits behind
+`UMediaPlayer`, owns the `IMediaEventSink` instance, and drives ticking/sample
+pulling. *Why it matters here:* `IMediaPlayerFactory::CreatePlayer(IMediaEventSink&)`
+hands your factory a sink the facade already constructed — you receive it, you
+never create it. There is no "add event firing later" path; the sink exists
+before your player does.
 
 **`IMediaEventSink` / `EMediaEvent`** — how a backend reports state changes
 upward: `MediaOpened`, `MediaOpenFailed`, `TracksChanged`, `MediaClosed`.
@@ -369,9 +465,18 @@ these. Decode perfectly and never fire `MediaOpened`, and the whole Blueprint si
 appears dead.
 
 **`IMediaSamples` / `FMediaSamples`** — the queue holding decoded samples between
-the decode thread and the render side. `FMediaSamples` is the engine's ready-made
-implementation in the `MediaUtils` module. *Use it; do not hand-roll one in
-Phase 1.*
+the decode thread and the render side. **`IMediaSamples` is what a player must
+*be*; `FMediaSamples` is something a player may *have*.** The interface is the
+contract `FMediaPlayerFacade` calls through and every backend must satisfy it;
+`FMediaSamples` (in `MediaUtils`) is merely one implementation — a **FIFO
+queue** — that Epic wrote because most players need exactly that. Nothing in
+the engine inherits `FMediaSamples`; the players that use it *own* one as a
+`TUniquePtr` member. *Use it here (D14) because RTSP frames arrive
+sequentially, which is what a FIFO queue is for.* The counter-example worth
+knowing: `FImgMediaPlayer` implements `IMediaSamples` itself, because its
+storage is an LRU cache keyed by frame number (random access over files that
+all already exist) — a FIFO queue physically cannot serve that. See
+`M2DesignDerivation.md` Q1.
 
 **`IMediaTextureSample`** — one decoded frame handed to the engine, describing its
 dimensions, pixel format, stride, timestamp, and colour conversion needs.
@@ -396,6 +501,34 @@ are fetched by matching that time. Natural for a file with a known duration;
 awkward for a live stream that has no start, no end, and no seekable timeline.
 *The central design tension in this project.*
 
+**Playback timing V1 / V2** — two entirely different timing models
+`IMediaPlayer` supports, selected by overriding `GetPlayerFeatureFlag`.
+**V1** (the default): the facade keeps its own `FTimespan`-based clock and
+asks the player for whatever samples fall in a time range each tick — a
+"wall clock." **V2** (`EFeatureFlag::UsePlaybackTimingV2`): samples carry an
+`FMediaTimeStamp` (time *and* a sequence index — see below); the facade asks
+the sample queue for the single best sample instead of walking a range — a
+"lap counter," not a wall clock. *D13: this project builds M2 on V2.*
+
+**`FMediaTimeStamp` / `SequenceIndex`** — a timestamp made of a `Time` (an
+`FTimespan`) plus a `SequenceIndex` (int64). Comparisons check the sequence
+index first, then time — so a *higher sequence index always counts as
+later in playback*, regardless of what the time value says. The header's own
+words: it exists for "an event that causes the time to no longer be
+monotonic — e.g. seek or loop." *Why it matters here:* a reconnect (D10) is
+exactly that kind of event — a fresh RTSP session means FFmpeg's PTS resets
+to near-zero while the player session stays open. Bumping `SequenceIndex` by
+one on each reconnect makes the first post-reconnect frame correctly compare
+as "later" than the last pre-reconnect frame, with no manual timestamp
+rebasing. See `Architecture.md` §7 D13 for the full worked example.
+
+**`AlwaysPullNewestVideoFrame`** — an `IMediaPlayer::EFeatureFlag` that tells
+the facade "don't gate video output with your own timing, just take the best
+available sample now." Only meaningful under V2 timing — it's the concrete
+mechanism this project uses to implement D9's latest-frame-wins policy,
+resolved for free by `FMediaSamples::FetchBestVideoSampleForTimeRange`
+(already implemented in the engine's own queue) rather than hand-written.
+
 ---
 
 ## 7. Unreal general
@@ -405,12 +538,94 @@ and dangerous for native code: a leaked thread or a hung handle survives PIE
 stopping and corrupts the editor session, where in a standalone build the process
 would simply exit and clean up.
 
+**`FString` / `FName` / `FText`** — Unreal's three string types, each for a
+different job, and picking the wrong one is a real mistake rather than a style
+choice. **`FString`** is *data*: a mutable character buffer you parse, split and
+compare, never meant to be read by a human. **`FName`** is *identity*: interned
+and case-insensitive, cheap to compare, used as a lookup key (`GetPlayerName()`
+returns one, and it's what a `UMediaSource`'s `PlatformPlayerNames` stores).
+**`FText`** is *presentation*: something a person reads on screen, carrying a
+localisation identity so it can be translated. Rule of thumb: **a human reads it
+→ `FText`; code compares it → `FString`; it's a lookup key → `FName`.**
+*Why it matters here:* `IPStreamMediaFactoryModule.cpp` uses all three —
+`SupportedUriSchemes` is `FString` (machine comparison), `GetPlayerName()` is
+`FName` (lookup key), and `GetDisplayName()`/`CanPlayUrl`'s `OutErrors` are
+`FText` because the engine's own interface demands them: both surface in the
+editor UI.
+
+**`LOCTEXT` / `LOCTEXT_NAMESPACE`** — the macro that builds an `FText` with a
+**localisation identity** rather than just characters:
+`LOCTEXT("SchemeNotSupported", "The URI scheme '{0}' is not supported")` — first
+argument is a stable *key*, second is the source-language text. **Keys are
+invented by the author, not chosen from any predefined list** — the macro passes
+the literal straight through, building an `FText` from the triple
+`(namespace, key) → text`. Uniqueness is scoped to the namespace, so
+`"NoSchemeFound"` in `FIPStreamMediaFactoryModule` and the identically-named key
+in Epic's `FWmfMediaFactoryModule` are unrelated entries. Both arguments must be
+**string literals** (the localisation gather tool parses source statically and
+never runs the code, so it can only see what is literally written). The **key**
+is the durable handle a translation attaches to — rename it and the translation
+is orphaned, whereas rewording the text under an unchanged key just flags the
+translation as stale. Convention is short PascalCase naming the message's
+*purpose*, not restating its content. Key plus the
+surrounding `LOCTEXT_NAMESPACE` uniquely identify that string project-wide; UE's
+localisation gather tool scans source for these, builds a manifest for
+translators, and at runtime the `FText` resolves to the current culture's
+version. An `FString` has no identity, so nothing can find it to translate it.
+**The translating is done by people, not by Unreal** — the engine gathers,
+stores (`.manifest`/`.archive`), compiles (`.locres`) and looks up; a human or a
+translation vendor supplies the sentences. *Why it costs us nothing here:* this
+project will never run a gather, so no translation is ever found and every
+`FText` falls back to the source literal in the macro — identical behaviour to a
+hardcoded English string, with no setup and nothing to break.
+Using `LOCTEXT` outside a `#define LOCTEXT_NAMESPACE` block is a compile error —
+half its identity would be missing — which is why the macro is `#define`d above
+a class and `#undef`ed below it, so it can't leak into any file that includes it.
+*Related:* `FText::Format` uses numbered placeholders (`{0}`) rather than
+`printf`-style `%s` because different languages place the substitution at
+different points in the sentence; a numbered placeholder can move, a positional
+argument bakes English word order into the code.
+
 **`FRunnable`** — Unreal's interface for a worker thread.
 
 **Game thread / render thread / worker thread** — Unreal's main threads. The game
 thread runs gameplay and must never block; the render thread issues GPU commands.
 *Decode happens on a dedicated worker so a blocking network read cannot stall
 either.*
+
+**Race condition** — a bug where the outcome depends on the unpredictable
+relative timing of two threads touching the same data, rather than on any
+single thread's logic being wrong in isolation. Concretely here: if
+`AddVideo` (decode worker) and `FetchVideo` (game thread) could run at the
+exact same moment with no protection, the game thread could read the sample
+count *after* it's been incremented but *before* the actual frame data
+finishes being written — garbage or a crash, happening only on rare bad
+timing, which is what makes this class of bug so hard to reproduce.
+
+**Critical section / `FCriticalSection` / `FScopeLock`** — a lock with one
+key: only one thread can hold it at a time. `FScopeLock` is the RAII
+wrapper — it grabs the key when constructed and releases it automatically
+when it goes out of scope, however the function exits. Wrapping every
+access to shared data (like `FMediaSamples`'s internal array) in the same
+lock turns "these two threads might overlap unpredictably" into "one always
+fully finishes before the other starts" — the race condition above becomes
+structurally impossible rather than just unlikely.
+
+**`TSharedPtr` / reference counting** — a smart pointer that solves the
+"who deletes this, and when" problem for an object with no single owner
+(a decoded sample: created by the worker thread, held in the queue, read by
+the render thread). Every copy of a `TSharedPtr` shares one counter,
+incremented on copy and decremented when a copy is destroyed; the object is
+only actually deleted once the counter proves nobody anywhere still holds a
+reference. `ESPMode::ThreadSafe` means that counter itself can be safely
+incremented/decremented from different threads.
+
+**Custom deleter** — instead of the default "call `delete` when the
+refcount hits zero," a `TSharedPtr` can be built with its own function to
+run at that moment instead. `TMediaObjectPool::AcquireShared()` uses this
+to recycle a sample object back into the pool's free list rather than
+freeing it — invisible to whatever was holding the `TSharedPtr`, which just
+sees a normal reference going out of scope.
 
 **RHI (Render Hardware Interface)** — Unreal's abstraction over D3D11/D3D12/Vulkan/
 Metal. Writing "at the RHI level" means writing graphics code once against all of
