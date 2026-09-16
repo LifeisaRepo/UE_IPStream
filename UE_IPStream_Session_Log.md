@@ -20,7 +20,7 @@ recent entries for detail.
 
 ## Current state
 
-**As of:** 2026-09-12 (Session 9)
+**As of:** 2026-09-16 (Session 10)
 **Phase:** 1 — RTSP ingest
 **Status: M2 STEP 1 PASSES — the Media Framework chain is proven end to end,
 with no FFmpeg in it.** Factory registers at `PostEngineInit`; `IP Stream Media`
@@ -36,9 +36,24 @@ Session 9 below.
 `main` in sync with `origin/main`, working tree clean, full credential scan of
 HEAD clean.
 
-**Next action: derive Q4 (the threading model) BEFORE any step-2 code** —
-agreed explicitly at the end of Session 9. See the Q4 statement in
-`M2DesignDerivation.md` and Session 9 below.
+**Q4 (the threading model) is DERIVED AND SETTLED as D15 — Session 10.**
+The decode loop runs on an owned `FRunnable` worker; `Close()` **joins** it; and
+M1's interrupt callback gains a stop flag so that join is bounded rather than a
+hang. Electra's detached async teardown was considered and rejected as
+disproportionate, with five recorded conditions that reopen it. Full record in
+`M2DesignDerivation.md`; summary in Session 10 below.
+
+**Next action: M2 step 2 — FFmpeg demux/decode on the worker thread**, behind
+the `Open()` that already works. D15 commits us to **measuring the game-thread
+pause at PIE stop** (M1's `Tick`-gap technique): single-digit ms confirms the
+decision, beyond ~100 ms invalidates its premise and reopens the alternative.
+
+**Local study notes now live in the Obsidian vault**
+(`Q:\Obsidian\LIAR_Learns\UE_IPStream\IssuesAndWalkthroughs`, a private git
+repo) and `Docs/IssuesAndWalkthroughs` is a **junction** to it, verified working
+from both VS Code and Obsidian. They were deleted on 2026-09-14 and recovered
+from the recycle bin on 2026-09-16 — this closed that gap. Still to do:
+`git add` and push them in the vault repo.
 
 **Credential hazard, hit and resolved — read before creating any test asset.**
 A `UStreamMediaSource` stores its URL as a default property **inside the binary
@@ -1925,3 +1940,203 @@ keeps the host).
 file. Memory: **new** `feedback_kiss_answers.md` — "KISS" in a question means
 answer short and simple, no assumed knowledge, glossary terms only with line
 numbers.
+
+---
+
+## Session 10 — 2026-09-16
+
+**Q4 derived and settled as D15. No code written this session.**
+
+### Data-loss incident, recovered before any other work
+
+`Docs/IssuesAndWalkthroughs/` was found **empty** at session start. All four
+local study notes — `M1FFmpegWalkthrough.md`, `M1DelayLoadRCA.md`,
+`M2DesignDerivation.md`, `M2PlayerWalkthrough.md` — had been deleted on
+**2026-09-14 20:53:49**, all four within 30 ms of each other, i.e. a
+folder-level delete. Two days *after* the last commit (`afa1a5d`, 2026-09-12
+23:05), so unrelated to that commit's docs-hygiene pass.
+
+They are gitignored (`.gitignore:88`) and have never been tracked, so git held
+no copy — exactly the risk `CLAUDE.md` names when it says to treat them as the
+only copy. All four were recovered intact from `F:\$RECYCLE.BIN` and restored by
+Sanjyot at their Session 9 content (mtimes 2026-09-12 22:56, sizes and line
+counts verified: 592 / 526 / 419 / 367 lines).
+
+**Worth acting on:** these files are one accidental folder delete away from
+being gone permanently, and the only reason this was caught is that a session
+happened to open them. A backup outside the repo is not yet in place.
+
+### Q4 — what runs the decode loop, and how is it shut down?
+
+Derived properly per the Session 8 rule: question stated, exact engine file and
+line ranges handed over, Sanjyot read and answered first, corrections and gaps
+filled afterwards. Full record — evidence, findings A1–A5 and B1–B6, decision,
+the alternative that lost, and the reopen conditions — in
+`M2DesignDerivation.md`.
+
+**Reading covered:** the primitives (`Runnable.h:30-75`,
+`RunnableThread.h:36-90`, `Event.h:20-90`, plus `WindowsRunnableThread.h/.cpp`
+for what `Kill` actually does); worked example A,
+`FImgMediaSchedulerThread` (both files in full); worked example B,
+`FElectraPlayer::CloseInternal` (`ElectraPlayer.cpp:383-493`) and
+`DoCloseAsync` (`:495-540`).
+
+**Facts established that the header comments do not state plainly:**
+
+- `Init`, `Run` and `Exit` all run on the **worker** thread; `Stop()` runs on
+  whoever calls `Kill()` (`WindowsRunnableThread.cpp:134-165`). That asymmetry
+  is the reason shared state is unavoidable. "The aggregating thread" in
+  `FRunnable`'s comments means the worker, not the creating thread.
+- `Kill(true)` = `Runnable->Stop()` + an **infinite** wait + `CloseHandle`, so it
+  contains `WaitForCompletion()` rather than complementing it
+  (`WindowsRunnableThread.h:79-119`).
+- `FImgMediaSchedulerThread` **never overrides `Stop()`** — so `Kill`'s call to
+  it is a no-op and the destructor does all the stopping by hand. Its `Run()`
+  loop never exits on its own; the thread's lifetime *is* the object's lifetime.
+- Electra's `CloseInternal` **never joins a worker.** It severs every callback
+  path first, then hands teardown to a thread-pool task that captures a
+  `TSharedPtr` **by value** — ownership in place of waiting. Non-shipping builds
+  add a 3-second watchdog that logs *"Player may be dead and dangling!"*.
+- `bKillAfterClose` does **not** mean "wait for shutdown" — the Session 9 guess
+  recorded in the derivation doc was wrong. It reaches
+  `GetPlayerFeatureFlag(EFeatureFlag::AllowShutdownOnClose)` via
+  `ElectraPlayer.h:96` → `ElectraPlayerPlugin.cpp:785`, and
+  `MediaPlayerFacade.cpp:1896` uses it to destroy the player the instant
+  `MediaClosed` arrives. It means the opposite of waiting.
+
+**Decision — D15: a hard join, bought with an interruptible worker.**
+An owned `FRunnable` worker (not a task — D10 needs a worker that outlives any
+one connection); FFmpeg session state in its own object behind a
+worker-thread-only boundary; and ImgMedia's four-step shutdown with **step 2
+replaced by the interrupt callback returning `1`**, because that callback is the
+only thing that can reach a thread parked in `av_read_frame`. Electra's one idea
+kept: sever callback paths into the player before tearing down.
+
+**The change that makes it work:** M1's callback
+(`IPStreamSpike.cpp:30-33`) knows a wall-clock deadline and nothing else, so
+after a `Close()` it keeps answering "keep going" until the deadline expires. It
+must read a stop flag as well as the clock.
+
+**Rejected — B, Electra's detached async teardown — as *disproportionate*.** It
+buys freedom from a wait we can bound to milliseconds and charges:
+nondeterministic teardown; a possible second RTSP session against a camera
+shared through an NVR with another user; and a crash risk neither reference
+plugin has — we `FreeDllHandle` the FFmpeg DLLs by hand
+(`IPStreamMediaModule.cpp:85-89`), and a detached worker still inside
+`avformat-*.dll` when that runs is executing unmapped memory. Electra's
+machinery is proportionate to Electra's scale (many uninterruptible threads,
+teardown that genuinely takes seconds); we have one thread and one blocking call.
+
+**Reopens if:** the join measures beyond ~100 ms; teardown stops being boundable
+(M3 or Phase 2 hardware decode); multi-stream arrives; any blocking path turns
+out not to poll the interrupt callback; or the worker acquires a game-thread
+dependency (which would make the join a deadlock). A documented partial retreat
+exists — adopt B's shared-ownership keep-alive *without* dropping the join.
+
+### Measurement this decision commits us to
+
+**M2 step 2 must measure the game-thread pause at PIE stop**, using M1's
+`Tick`-gap technique. Single-digit milliseconds confirms D15 and yields a devlog
+number; consistently beyond ~100 ms invalidates its premise. This is the
+evidence that decides whether D15 survives — it is not optional polish.
+
+### Teaching note
+
+The derivation stalled at `DoCloseAsync` because lambdas, capture semantics,
+`TFunction` and `TSharedPtr` reference counting had never been covered — Sanjyot
+said so directly rather than guessing, which was the right call and is what the
+rule is for. Covered from fundamentals, then the design question was re-asked in
+plain English and answered. Terms added to `Docs/Glossary.md` §10.
+
+His own words, which turned out to be the conclusion rather than a gap:
+*"ElectraPlayer's complicated shutdown procedure is not justified if we still
+need to do things in the ImgMedia way also."*
+
+### Files updated
+
+**Modified (tracked):** `Docs/Architecture.md` (D15 in §12),
+`Docs/Glossary.md` (new §10, "Threading and concurrency" — ~25 entries covering
+`FRunnable`/`FRunnableThread`/`FEvent`, TLS, lambdas and captures, `TFunction`,
+`TSharedPtr`/`ESPMode`, `Async`/`MoveTemp`, `TAtomic` vs `volatile`,
+`AVIOInterruptCB`), `CLAUDE.md`, this file.
+**Modified (local-only):** `M2DesignDerivation.md` — Q4 evidence list, findings
+A1–A5 and B1–B6, the D15 decision record, the alternative that lost, and five
+reopen conditions. 526 → 885 lines.
+
+**Not committed.** Nothing in `Plugins/` or `Content/` was touched; no code was
+written this session.
+
+
+### Study notes moved out of the repo and junctioned back in
+
+The backup gap identified at the top of this session is now closed. The four
+notes live at `Q:\Obsidian\LIAR_Learns\UE_IPStream\IssuesAndWalkthroughs` — a
+folder inside Sanjyot's Obsidian vault, which is a private git repo
+(`LifeisaRepo/LIAR_Learns`) on a local NTFS disk.
+`Docs/IssuesAndWalkthroughs` in this project is now a **junction** to it.
+
+Junction rather than symlink deliberately: `mklink /J` needs no elevation or
+Developer Mode, and Git for Windows walks a junction as an ordinary directory.
+`.gitignore:88` was tightened from `Docs/IssuesAndWalkthroughs/*` to
+`Docs/IssuesAndWalkthroughs` so the rule covers the **link entry itself** as
+well as its contents — with the old `/*` form, a link of that name would not
+have been ignored and could have been committed, putting a path into a personal
+vault in a public repo.
+
+Verified end to end: junction resolves; all four files intact (367 / 592 / 884 /
+419 lines); `git status` in this repo shows nothing from the folder;
+`git check-ignore` covers both the entry and its contents; a write made through
+the junction appeared on the `Q:\` side and **was picked up live by Obsidian
+without a restart**, which was the one genuinely uncertain part.
+
+**Known and accepted wart:** the notes contain eight relative links pointing out
+of the folder (`../Architecture.md`, `../Glossary.md`,
+`../../Plugins/…/IPStreamSpike.cpp`). They resolve when the notes are read
+through the project path; they will show as unresolved in Obsidian, which
+resolves relative paths against the vault root. Flipping the link direction does
+not fix this — it is a property of Obsidian's path model. Accepted, because the
+notes are read while working in the project, and Obsidian is serving as backup
+and sync rather than as the reading surface.
+
+**Still outstanding:** the four notes are untracked in the vault repo. They need
+a `git add` and push there before the backup is real. Sanjyot is doing that
+separately.
+
+**Credential scan of the notes before the move:** one hit,
+`M2PlayerWalkthrough.md:272` — `rtsp://admin:password@192.168.0.131/…`.
+Reported and **confirmed by Sanjyot as a placeholder**, left as-is. Detector
+pattern `rtsp://[^/\s]*:[^/\s]*@`, which reads only the authority section and
+matches to the last `@`, so an `@` inside a password cannot hide it.
+
+### Committed
+
+`84b208a` — "Decide how the decode thread is shut down". Five tracked files
+(`.gitignore`, `CLAUDE.md`, `Docs/Architecture.md`, `Docs/Glossary.md`, this
+file), +326/−25. Pushed; `main` in sync with `origin/main`, working tree clean.
+
+**Commit message convention corrected this session, and saved to memory:** no
+internal shorthand — decision numbers, derivation question numbers, findings
+labels — in commit messages, *especially* titles, because they are read months
+later from `git log` with none of the docs open. And keep the body to a few
+lines giving a basic understanding of the change; rationale, alternatives and
+measurements belong in the docs. The first drafts failed on both counts.
+
+### Agreed before clearing the chat
+
+- **Step 2 order:** FFmpeg session object first, then the interrupt stop flag,
+  then the worker, then wiring into the player, then the measurement. Recorded
+  in `CLAUDE.md`.
+- **Code delivery: option (a)** — posted in chat, Sanjyot types it in.
+- **A threading walkthrough doc is due**, `M2ThreadingWalkthrough.md`, written
+  live chunk by chunk. His reasoning: *"we are getting into core logic now."*
+
+### Next action
+
+**M2 step 2 — FFmpeg demux/decode on the worker thread, behind the `Open()`
+that already works.** The FFmpeg call sequence is M1's, already documented
+call-by-call in `M1FFmpegWalkthrough.md`; what is new is the threading, now
+settled by D15. Flagged going in: `~FIPStreamPlayer` stops being empty;
+`CreatePlayer` may want an `#if WITH_FFMPEG` guard so a failed DLL load returns
+`nullptr`; and the interrupt callback must gain its stop flag. A walkthrough doc
+for the worker/threading code is due per the standing rule, as the API surface
+is unfamiliar.

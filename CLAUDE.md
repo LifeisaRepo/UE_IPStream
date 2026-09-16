@@ -106,26 +106,83 @@ failure paths.
   skeleton"), `main` in sync with `origin/main`, working tree clean, full
   credential scan of HEAD clean.
 
-- **Next action: derive Q4 BEFORE writing any step-2 code.** Agreed explicitly
-  at the end of Session 9, choosing "derive first" over "code first and derive
-  if something bites."
-  **Q4 — what runs the decode loop, and how is it shut down?** `FRunnable` +
-  `FRunnableThread`, a task, or something else? Where does the FFmpeg session
-  state live — on the player, or its own object? What exact ordering guarantees
-  `Close()` cannot return while the worker still holds an FFmpeg handle? M1
-  proved the cancellation mechanism (`AVIOInterruptCB`, measured 6.039s on an
-  unreachable URL) but never combined it with a thread somebody is waiting to
-  join. This is the failure class flagged in "Model per phase" below — it
-  surfaces as an editor hang, not a compile error.
+- **Q4 IS DERIVED AND SETTLED — D15, Session 10 (2026-09-16).** Derived per the
+  Session 8 rule: evidence handed over, Sanjyot read and answered first. The
+  full record — the primitives, worked example A (`FImgMediaSchedulerThread`),
+  worked example B (`FElectraPlayer::CloseInternal` / `DoCloseAsync`), findings
+  A1–A5 and B1–B6, the decision, the alternative that lost, and five reopen
+  conditions — is in `M2DesignDerivation.md`.
+  **D15: a hard join, bought with an interruptible worker.** An owned `FRunnable`
+  worker (not a task — D10 needs a worker that outlives any one connection);
+  FFmpeg session state in its own object behind a worker-thread-only boundary;
+  ImgMedia's four-step shutdown with **step 2 replaced by the interrupt callback
+  returning `1`**, since that callback is the only thing that can reach a thread
+  parked in `av_read_frame`. One idea kept from Electra: sever every callback
+  path back into the player *before* tearing down.
+  **The change that makes it work:** M1's callback (`IPStreamSpike.cpp:30-33`)
+  knows a wall-clock deadline and nothing else, so after a `Close()` it keeps
+  answering "keep going" until that deadline expires. It must read a stop flag
+  as well as the clock.
+  **Rejected as disproportionate:** Electra's detached async teardown. It buys
+  freedom from a wait we can bound to milliseconds and charges nondeterministic
+  teardown, a possible second RTSP session against the shared camera, and a
+  crash risk unique to us — we `FreeDllHandle` FFmpeg by hand
+  (`IPStreamMediaModule.cpp:85-89`), so a detached worker still inside
+  `avformat-*.dll` at that moment is executing unmapped memory.
 
-- **Then M2 step 2** — FFmpeg demux/decode on the worker thread, behind the
-  `Open()` that already works. The FFmpeg call sequence itself is **not new**:
-  it is M1's, documented call-by-call in `M1FFmpegWalkthrough.md`. Flagged for
-  it: `~FIPStreamPlayer` stops being empty (a thread must be shut down there),
-  and `CreatePlayer` may want an `#if WITH_FFMPEG` guard so a failed DLL load
-  returns `nullptr` rather than a player that can never decode. Then step 3
-  (samples into `FMediaSamples`, enable `AlwaysPullNewestVideoFrame`) and step 4
-  (`UMediaTexture` in PIE).
+- **Next action: M2 step 2** — FFmpeg demux/decode on the worker thread, behind
+  the `Open()` that already works. The FFmpeg call sequence itself is **not
+  new**: it is M1's, documented call-by-call in `M1FFmpegWalkthrough.md`; the
+  threading is what was new, and D15 settles it.
+
+  **Agreed order of work (Session 10, before a fresh chat):**
+
+  1. **The FFmpeg session object** — owns `AVFormatContext`, `AVCodecContext`
+     and the interrupt struct; open / read-and-decode / close. Per D15 this is
+     its own type, not loose members on the player: the boundary is that only
+     the worker thread touches it. **Start here.**
+  2. **The stop flag in the interrupt callback.** M1's callback
+     (`IPStreamSpike.cpp:30-33`) knows only a wall-clock deadline, so after a
+     `Close()` it keeps answering "keep going" until that deadline expires. It
+     must read a stop flag too. Small, and the entire shutdown design rests on
+     it — do it early, never as an afterthought.
+  3. **The worker** — the `FRunnable`: the loop, and the four-step shutdown in
+     its destructor (flag → interrupt → `WaitForCompletion()` → `Kill`/free).
+  4. **Wire it into the player** — `Open()` starts it, `Close()` joins it,
+     `~FIPStreamPlayer` stops being empty. Plus an `#if WITH_FFMPEG` guard on
+     `CreatePlayer` so a failed DLL load returns `nullptr` rather than a player
+     that can never decode. (`WITH_FFMPEG` already exists —
+     `Source/ThirdParty/FFmpeg/FFmpeg.Build.cs:46`.)
+  5. **Measure the PIE-stop pause.** D15 commits step 2 to a measurement, not
+     just a build: the game-thread pause when PIE stops, via M1's `Tick`-gap
+     technique. Single-digit milliseconds confirms D15; consistently beyond
+     ~100 ms invalidates its premise and reopens the rejected alternative.
+
+  **Code delivery for step 2: option (a) — posted in chat, Sanjyot types it in.**
+  Chosen explicitly at the end of Session 10. Do not write to `.h`/`.cpp`
+  without asking again.
+
+  **A walkthrough doc is due and is not optional this time** — his words: *"we
+  are getting into core logic now."* New file,
+  `Docs/IssuesAndWalkthroughs/M2ThreadingWalkthrough.md`, same format as
+  `M1FFmpegWalkthrough.md`: one logical job per section, written **live as each
+  chunk is covered in conversation**, not afterwards from memory. Threading is
+  the unfamiliar API surface here — `FRunnable`, `FRunnableThread`, `FEvent`,
+  `TAtomic` — and `Docs/Glossary.md` §10 now defines all of it.
+
+  Then step 3 (samples into `FMediaSamples`, enable
+  `AlwaysPullNewestVideoFrame`) and step 4 (`UMediaTexture` in PIE).
+
+- **The local study notes now live in the Obsidian vault, junctioned back in.**
+  Real files at `Q:\Obsidian\LIAR_Learns\UE_IPStream\IssuesAndWalkthroughs`
+  (a git repo, `LifeisaRepo/LIAR_Learns`, local NTFS disk);
+  `Docs/IssuesAndWalkthroughs` in this project is a **junction** to it, verified
+  working in both VS Code and Obsidian, including edits made through the
+  junction. `.gitignore:88` is now `Docs/IssuesAndWalkthroughs` with no `/*`, so
+  it covers the link entry as well as its contents.
+  **Background:** all four notes were deleted on 2026-09-14 and recovered from
+  the recycle bin on 2026-09-16 — they had never been tracked by any repo. Keep
+  writing to them exactly as before; the junction is transparent.
 
 - **Still-open thread from Block C:** which `EMediaEvent`s actually fire
   around a reconnect. Flagged, not resolved — an M4 concern, doesn't block
@@ -152,6 +209,7 @@ Full rationale in [Docs/Architecture.md §12](Docs/Architecture.md). Summary:
 | D12 | M3 (GPU colour conversion) is the designated **cuttable** milestone |
 | D13 | D9's latest-frame-wins built on `IMediaPlayer`'s V2 timing model (`FMediaTimeStamp`/`SequenceIndex`), not V1 |
 | D14 | `FIPStreamPlayer` **owns** a `TUniquePtr<FMediaSamples>`; implements `IMediaCache`/`IMediaControls`/`IMediaTracks`/`IMediaView` directly |
+| D15 | Decode loop on an owned `FRunnable` worker; `Close()` **joins** it; M1's interrupt callback gains a stop flag so the join is bounded. Electra's detached async teardown rejected as disproportionate — see `M2DesignDerivation.md` Q4 for the five reopen conditions |
 
 **Do not re-litigate these** unless there is new technical evidence.
 
