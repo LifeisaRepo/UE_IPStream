@@ -686,3 +686,129 @@ copying it to system RAM and back. Hardware decoders output NV12 directly into a
 GPU texture, so the ideal path never touches the CPU at all.
 *The endpoint the colour-conversion staging in §7 of the architecture doc is
 building toward.*
+
+---
+
+## 10. Threading and concurrency
+
+Everything in this section came out of M2's Q4 — what runs the decode loop and
+how it is shut down. `M2DesignDerivation.md` has the full derivation.
+
+**Thread** — one independent sequence of execution. A process has several running
+at once, genuinely in parallel on separate cores.
+
+**Game thread** — Unreal's main thread: gameplay, actor ticks, input, and the
+editor's own UI. **If it is inside your function, nothing else in the editor
+happens** — no rendering, no Stop button, no window redraw. A game thread that
+waits forever is an editor hang, which is why *where* a blocking call runs is a
+design decision and not an implementation detail.
+
+**Blocking call** — a function that does not return until some external thing
+completes. `av_read_frame` waiting on a camera is the case that drives this
+whole project: bounded by the network, which is to say bounded by nothing.
+
+**Joining a thread** — making one thread wait until another has finished and
+exited. The guarantee it buys is that afterwards, the other thread is *provably*
+not using anything, so its resources can be freed safely.
+
+**Use-after-free** — freeing memory while something else still holds a pointer
+to it. Across threads it is timing-dependent: it can work fifty times and crash
+on the fifty-first, and the crash usually surfaces somewhere unrelated to the
+bug. The hazard a join exists to remove.
+
+**Race condition** — a defect whose appearance depends on the relative timing of
+two threads. Distinct from a deadlock: a race produces wrong behaviour
+intermittently; a deadlock produces no behaviour at all.
+
+**Deadlock** — two parties each waiting for something only the other can do, so
+neither proceeds. The specific one to fear here: the game thread joining a worker
+that is itself waiting on the game thread.
+
+**`FRunnable`** — Unreal's *work* object: your loop and your data, as a plain
+C++ object with no special powers. Four virtuals (`Runnable.h:30-75`): `Init()`,
+`Run()` (pure virtual, where the loop lives), `Stop()`, `Exit()`. **`Init`, `Run`
+and `Exit` all execute on the worker thread; `Stop()` executes on whichever
+thread calls `Kill()`.** That asymmetry is why shared state is unavoidable.
+`Stop()`'s default body is empty — the engine cannot stop your loop for you, it
+can only tell you to.
+
+**"The aggregating thread"** — the phrasing in `FRunnable`'s comments for *the
+thread that the `FRunnableThread` object manages*, i.e. the worker — **not** the
+thread that created it. Visible in `WindowsRunnableThread.cpp:134-165`.
+
+**`FRunnableThread`** — Unreal's *thread* object: the OS-level thread that runs
+an `FRunnable`. An interface; Epic supplies the platform implementations
+(`FRunnableThreadWin`), so you never write one. `FRunnableThread::Create(...)`
+returns one **already running** — the thread starts immediately, not on some
+later signal.
+- **`Kill(bool bShouldWait)`** — calls `Stop()` on the runnable, then, if
+  `bShouldWait`, **waits infinitely** for the thread to exit, then closes the OS
+  handle. That word "infinitely" (`RunnableThread.h:83`) is the hang.
+- **`WaitForCompletion()`** — purely the wait, nothing else. `Kill(true)`
+  contains it.
+- *Gotcha:* the base declares `Kill(bool = true)`, `FRunnableThreadWin` overrides
+  with `Kill(bool = false)`. Default arguments are not virtual — the static type
+  of the pointer picks the default. **Pass it explicitly.**
+
+**`FEvent`** — a cross-thread doorbell (`Event.h`). `Wait(ms)` sleeps until
+someone calls `Trigger()` or the timeout expires — returning `true` if triggered,
+`false` if it timed out. `Wait()` with no argument waits forever.
+**`Trigger()` carries no payload**, only a nudge, which is why "wake up" and
+"here is what changed" must always be two separate mechanisms.
+
+**`TAtomic<T>`** — a value that can be read and written from several threads
+without tearing or reordering surprises. The correct type for a stop flag.
+*Not* the same as `volatile`, which only stops the compiler caching a value in a
+register and guarantees nothing about atomicity or ordering between threads.
+
+**TLS (Thread Local Storage)** — a variable with one copy *per thread* rather
+than one copy shared by all. Lets a system keep per-thread bookkeeping without
+locking. Unreal sets it up around your `Run()` (`WindowsRunnableThread.cpp:145`,
+`:156`).
+
+**`FSingleThreadRunnable` / `Tick()`** — the fallback for when the engine runs
+with multithreading disabled. `FRunnableThread::Create` then builds an
+`FFakeThread` (`ThreadingBase.cpp:783-786`) that never calls `Run()` and instead
+calls `Tick()` from the main loop. A `Tick()` implementation therefore drains
+available work and **returns promptly** — it cannot loop and must not block.
+
+**Lambda** — a function written inline, with a capture list:
+`[Captured](Args) { Body }`. The mental model that makes everything else clear:
+the compiler turns it into an **anonymous object whose member variables are the
+captures**, with a `()` operator. A lambda is data that happens to be callable —
+which is what makes it something you can hand to another thread.
+
+**Capture by value vs by reference** — `[X]` stores a copy inside the lambda
+object; `[&X]` stores only a reference back to the original. **By reference is a
+bug whenever the lambda outlives the scope that created it**, which is the normal
+case when handing work to another thread.
+
+**`TFunction<Signature>`** — a box holding any callable thing of a given shape
+(Unreal's `std::function`). Needed because every lambda has a unique, unnameable
+compiler-generated type, so without the box you cannot declare a variable to hold
+one or a parameter to accept one.
+
+**`TSharedPtr` / reference counting** — shared ownership. A counter sits beside
+the object; every copy of the pointer increments it, every destroyed copy
+decrements it, and the object is deleted when it reaches zero. Nobody decides
+when to delete; it happens when the last holder lets go.
+**`ESPMode::ThreadSafe`** (the default, `SharedPointerFwd.h:11-18`) makes that
+counter atomic, which is what makes it safe to copy or release from several
+threads.
+*Why it matters here:* capturing a `TSharedPtr` **by value** into a lambda keeps
+the object alive for as long as the task exists — ownership used in place of
+waiting. That is exactly how `ElectraPlayer.cpp:498` avoids joining its workers.
+
+**`Async(EAsyncExecution, TFunction)`** — run a box of work somewhere other than
+here. `Async.h:27-48` lists the destinations; `ThreadGraph`/`TaskGraph` are
+documented for *short* tasks, `Thread` and `ThreadPool` for long-running ones.
+
+**`MoveTemp`** — Unreal's `std::move`: transfer the contents rather than copy
+them, leaving the source empty.
+
+**`AVIOInterruptCB`** — FFmpeg's escape hatch (`avio.h:48-62`): a callback FFmpeg
+invokes *during* blocking operations, which aborts the operation if it returns
+`1`. **The only mechanism that can reach a thread parked inside `av_read_frame`
+— our equivalent of `FEvent::Trigger()`.** The header promises it is called, but
+documents no interval; M1's measured 39 ms overshoot against a 6.0 s deadline is
+the only evidence of granularity we have.
