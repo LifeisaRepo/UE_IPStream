@@ -761,6 +761,36 @@ without tearing or reordering surprises. The correct type for a stop flag.
 *Not* the same as `volatile`, which only stops the compiler caching a value in a
 register and guarantees nothing about atomicity or ordering between threads.
 
+> **This project uses `std::atomic<T>`, not `TAtomic<T>`** (decided 2026-09-17).
+> `Templates/Atomic.h:13` says *"`TAtomic` is planned for deprecation. Please
+> use `std::atomic`"*. `TAtomic` still compiles in 5.3 — it is gated behind
+> `USE_DEPRECATED_TATOMIC`, which defaults to `1` — so both work, and the
+> ImgMedia and Electra source read during Q4 uses `TAtomic`. Epic's own
+> guidance decided it. Everything in this entry applies to both; only the
+> spelling differs (`.Load(EMemoryOrder::Relaxed)` becomes
+> `.load(std::memory_order_relaxed)`).
+
+**Why a shared value needs this at all** — a plain `bool` written by one thread
+and read by another is undefined behaviour in C++, so the compiler may assume it
+never happens and optimise on that basis. Two concrete consequences: it can load
+the value into a register once and test the register forever, never seeing the
+write (an infinite loop, from a legal optimisation); and each CPU core has its
+own cache, so a write on one core can sit there before another core can see it.
+Marking it atomic forces a real read from memory, blocks reordering across it,
+and makes the write visible to other cores.
+
+**The direction of the causality matters.** A value is not shared *because* it
+is atomic — it is shared because two threads hold a pointer to the same bytes.
+`atomic` is what makes that sharing *correct*. So the question to ask is never
+"should this be atomic?" but "does a second thread touch this?"
+
+**A callback does not imply a second thread.** A callback is a function pointer;
+it runs on whichever thread called it. Where a C library invokes a callback from
+inside a blocking call — FFmpeg's `AVIOInterruptCB` being this project's case —
+the callback runs on the thread that made the call, so state shared only with
+that callback needs no atomic. Assuming otherwise marks everything atomic, at
+which point the annotation tells a reader nothing.
+
 **TLS (Thread Local Storage)** — a variable with one copy *per thread* rather
 than one copy shared by all. Lets a system keep per-thread bookkeeping without
 locking. Unreal sets it up around your `Run()` (`WindowsRunnableThread.cpp:145`,
