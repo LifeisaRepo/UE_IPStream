@@ -20,8 +20,36 @@ recent entries for detail.
 
 ## Current state
 
-**As of:** 2026-09-16 (Session 10)
+**As of:** 2026-09-18 (Session 12)
 **Phase:** 1 — RTSP ingest
+
+**READ FIRST — how to explain, changed 2026-09-17.** `CLAUDE.md` now carries six
+hard rules under **"How to explain — hard rules, from 2026-09-17"**, and they
+outrank ordinary style guidance: no jargon explaining jargon; one idea per
+chunk; concept before code; check with a restatement not "make sense?"; go down
+a level rather than re-explaining longer; fewest and simplest words. The older
+bullet "explanation length is not a cost" has been corrected to **"coverage is
+not a cost; repetition is"**. Session 11 below has the context.
+
+**M2 step 2, item 1 is CODE-COMPLETE.** The FFmpeg session object
+(`FIPStreamFFmpegSession`) has both `.h` and `.cpp` written, typed in and
+reviewed — **but not yet compiled, and that is the next action.** Nothing calls
+it yet, so it builds as dead code, which is exactly the check wanted before the
+worker goes on top.
+
+Decisions along the way: `std::atomic` over `TAtomic` (`Atomic.h:13`),
+`UE_NONCOPYABLE`, a five-value `EIPStreamDecodeResult`, the stop flag declared
+on the session rather than the `FRunnable` (the interrupt callback gets one
+`void*`, so that pointer is `this`), `relaxed` memory ordering on the flag,
+`DecodeNext()` asking the decoder before reading a packet, and 6.0 s connect /
+2.0 s read timeouts. `Close()` deliberately does **not** reset the stop flag.
+Two bugs caught in review — a missing `return` after a decode error, and an
+omitted `avcodec_parameters_to_context()`. Full detail in Session 12;
+call-by-call reasoning in `M2ThreadingWalkthrough.md` §1-7.
+
+**Item 2 (the stop flag in the interrupt callback) was absorbed into item 1.**
+Next is item 3, the `FRunnable` worker.
+
 **Status: M2 STEP 1 PASSES — the Media Framework chain is proven end to end,
 with no FFmpeg in it.** Factory registers at `PostEngineInit`; `IP Stream Media`
 is selectable as the player override on a `UMediaSource`; our factory beats
@@ -2140,3 +2168,249 @@ settled by D15. Flagged going in: `~FIPStreamPlayer` stops being empty;
 `nullptr`; and the interrupt callback must gain its stop flag. A walkthrough doc
 for the worker/threading code is due per the standing rule, as the API surface
 is unfamiliar.
+
+---
+
+## Session 11 — 2026-09-17
+
+**M2 step 2, item 1: the FFmpeg session object — header designed and typed in.
+And a process change that outranks it.**
+
+### The header
+
+`FIPStreamFFmpegSession`, at
+`Plugins/IPStreamMedia/Source/IPStreamMedia/Private/IPStreamFFmpegSession.h`.
+Written by Sanjyot from chat (option (a), as agreed in Session 10). Owns
+`AVFormatContext`, `AVCodecContext`, a reusable `AVPacket` and `AVFrame`, the
+video stream index, the interrupt deadline and the stop flag. Three verbs —
+`Open()`, `DecodeNext()`, `Close()` — plus `RequestStop()` / `IsStopRequested()`
+as the only methods callable from another thread.
+
+`.cpp` not yet written. Chunk 2 (`Open()`) deliberately not started.
+
+### Decisions taken
+
+- **`std::atomic<bool>`, not `TAtomic<bool>`.** `Templates/Atomic.h:13` reads
+  *"`TAtomic` is planned for deprecation. Please use `std::atomic`"*, read on
+  disk. `TAtomic` still compiles in 5.3 behind `USE_DEPRECATED_TATOMIC`
+  (defaults to `1`), so both work — Epic's own guidance decided it. The ImgMedia
+  and Electra source read during Q4 uses `TAtomic`, which is age, not
+  endorsement. `Docs/Glossary.md` §10 documents `TAtomic` and now needs a
+  footnote.
+- **`UE_NONCOPYABLE(FIPStreamFFmpegSession)`** (`CoreMiscDefines.h:325`) rather
+  than two hand-written `= delete` lines. The session owns raw FFmpeg pointers
+  freed by hand in its destructor; a compiler-generated copy would duplicate the
+  addresses and double-free them, and there is no meaningful copy of a live
+  network connection. The macro also deletes the two move operations, which we
+  do not want either.
+- **`EIPStreamDecodeResult`** with five values — `GotFrame`, `NoFrameYet`,
+  `Aborted`, `StreamEnded`, `Error`. Accepted provisionally, to be revisited if
+  `DecodeNext()` turns out to need finer distinctions.
+- **The stop flag is declared on the session, not on the `FRunnable`.** The
+  interrupt callback is a C function FFmpeg calls with exactly one `void*`
+  (`avio.h:60`), and that pointer is the only channel into a thread blocked
+  inside `av_read_frame`. Putting the flag on the session makes that pointer
+  `this` — free and always valid. The alternative puts the flag on the
+  `FRunnable` and gives the session a raw back-pointer to it, which needs a
+  wiring step nothing enforces (forget it and shutdown hangs, cleanly compiled)
+  and couples the session's correctness to another object's lifetime.
+
+### A claim of Claude's that was wrong, and the correction
+
+Claude asserted that `FImgMediaSchedulerThread` "literally does" the rejected
+alternative, implying engine precedent against our choice. Sanjyot asked to see
+it. On reading `ImgMediaSchedulerThread.h:66`, the flag *is* on the `FRunnable`
+— but **ImgMedia has no second object at all**, no session and no foreign
+library holding a callback, so the question "which of two classes declares the
+flag" does not exist there. It is not evidence either way.
+
+The correct general statement, now in the walkthrough: **the flag on the session
+is not better in general.** It is better given a constraint we have and ImgMedia
+does not — a C library reaching us through a single opaque pointer. Remove
+FFmpeg and the flag belongs on the `FRunnable`, exactly where ImgMedia put it.
+
+This is the Q3 lesson recurring: engine precedent shows what works in the
+engine's situation, not what is right in ours. **It also shows the Session 8
+derivation rule working in the direction it was written for** — Sanjyot asking
+to see the source caught an overstated claim that would otherwise have gone into
+his notes as fact.
+
+### The process change — this is the important part of the session
+
+Chunk 1 took three passes and Sanjyot still had to re-derive it himself. The
+content was correct throughout; the delivery failed. His words: *"This was
+already too much to understand and learn."*
+
+Six hard rules are now in `CLAUDE.md` under **"How to explain — hard rules,
+from 2026-09-17"**, marked as the highest-priority instructions in that file for
+any teaching message:
+
+1. **Never explain jargon with other jargon.** Failed by explaining forward
+   declarations as *"a pointer to an incomplete type is itself a complete
+   type"*; and by using *thread affinity, translation unit, undefined behaviour,
+   memory model, member initialisation order* undefined in one message.
+2. **One idea per chunk**, max ~10 lines of code attached. "Chunk 1" carried six
+   concepts plus a 60-line class declaration.
+3. **Concept first, code second** — never post a finished file and then explain
+   its parts. Assemble the full listing only once every piece is understood, so
+   it reads as a summary rather than an introduction.
+4. **Check with a specific question or a restatement request**, never "does that
+   make sense?"
+5. **When he says he doesn't understand, go down a level — do not re-explain.**
+   The second pass was longer than the first.
+6. **Fewest words, simplest words.**
+
+**Also corrected:** `CLAUDE.md`'s long-standing bullet *"explanation length is
+not a cost on this project"* was being read as licence to restate one idea in
+several phrasings. It now reads **"coverage is not a cost; repetition is"** —
+cover every "why" once, then stop. The original never meant otherwise.
+
+**What actually diagnosed the problem:** Sanjyot restating the whole concept in
+his own words, unprompted. That one message exposed four misunderstandings after
+two explanation passes had exposed none. Asking for a restatement is now the
+standard check.
+
+### Next action
+
+**M2 step 2 chunk 2 — `Open()`**, under the new rules: one idea at a time,
+concept before code, restatement as the check. Then `DecodeNext()`, then
+`Close()` and the destructor, then item 2 onward from the Session 10 order.
+
+---
+
+## Session 12 — 2026-09-18
+
+**M2 step 2, item 1 is code-complete: `FIPStreamFFmpegSession.h` and `.cpp` both
+written and reviewed.** Not yet compiled — that is the next action.
+
+### What was built
+
+`FIPStreamFFmpegSession`, at
+`Plugins/IPStreamMedia/Source/IPStreamMedia/Private/IPStreamFFmpegSession.{h,cpp}`.
+Owns one FFmpeg connection: `AVFormatContext`, `AVCodecContext`, a reusable
+`AVPacket` and `AVFrame`, the video stream index, the interrupt deadline and the
+stop flag. `Open()` / `DecodeNext()` / `Close()`, plus `RequestStop()` and
+`IsStopRequested()` as the only methods legal from another thread.
+
+Typed in by Sanjyot at the assemble step (option (a)). Full call-by-call
+reasoning in `M2ThreadingWalkthrough.md` §1-7.
+
+### Decisions taken
+
+- **`std::atomic<bool>`, not `TAtomic<bool>`** — `Templates/Atomic.h:13` says
+  *"planned for deprecation. Please use `std::atomic`"*. `TAtomic` still compiles
+  behind `USE_DEPRECATED_TATOMIC` (default `1`), so both work; Epic's own
+  guidance decided it. ImgMedia and Electra use `TAtomic`, which is age, not
+  endorsement. `Docs/Glossary.md` §10 carries the note.
+- **`UE_NONCOPYABLE`** (`CoreMiscDefines.h:325`) rather than hand-written
+  `= delete` lines. The session owns raw FFmpeg pointers freed by hand; a
+  compiler-generated copy would duplicate the addresses and double-free them.
+- **The stop flag is declared on the session, not on the `FRunnable`.** The
+  interrupt callback is a C function FFmpeg calls with exactly one `void*`
+  (`avio.h:60`), and that is the only channel into a thread blocked inside
+  `av_read_frame`. Putting the flag on the session makes that pointer `this` —
+  free and always valid. The alternative needs a raw back-pointer from the
+  session into its owner, wired by a step nothing enforces; forget it and
+  shutdown hangs, cleanly compiled.
+- **`relaxed` memory ordering** on both flag accessors. The flag signals nothing
+  but itself, and being one loop iteration late costs nothing. Reopens the
+  moment any data rides along with it — **including if `DeadlineSeconds` ever
+  becomes game-thread-written** (a Blueprint-editable timeout, say), which would
+  also stop it being worker-thread-only.
+- **`DecodeNext()` asks the decoder for a frame first**, and only reads a packet
+  when the decoder reports itself empty. This makes `AVERROR(EAGAIN)` from
+  `avcodec_send_packet` unreachable, which is the case M1's order can hit and
+  silently drop a packet on. It also keeps one call to one blocking read, so the
+  worker can check the stop flag between calls — which matters for D15.
+- **Two timeouts, as named constants:** 6.0 s connect (M1's measured number),
+  2.0 s read (one full GOP at GOP = 50, so a normal keyframe gap cannot trip it).
+- **`Close()` deliberately does not reset `bStopRequested`.** `Close()` ends a
+  connection; `RequestStop()` ends the worker. Resetting it would let the
+  reconnect path clear a shutdown request that had just been made.
+
+### A claim of Claude's that was wrong, and the correction
+
+Claude asserted `FImgMediaSchedulerThread` "literally does" the rejected
+stop-flag alternative, implying engine precedent against our choice. Sanjyot
+asked to see it. `ImgMediaSchedulerThread.h:66` does put the flag on the
+`FRunnable` — but **ImgMedia has no second object at all**, no session and no C
+library holding a callback, so the question does not exist there. It is not
+evidence either way.
+
+The correct general statement, now in the walkthrough: the flag on the session
+is not better in general. It is better *given a constraint we have and ImgMedia
+does not*. Remove FFmpeg and the flag belongs on the `FRunnable`, exactly where
+ImgMedia put it. Q3's lesson recurring — and the Session 8 derivation rule
+working as intended, since asking to see the source is what caught it.
+
+### `analyzeduration` was removed — the line did nothing
+
+Sanjyot asked where the three `AVDictionary` keys came from and how 32768 was
+chosen. Honest answer: carried over from M1, and M1 got them from Claude's
+recall, not evidence. Checking properly turned up a real finding.
+
+`ffmpeg -h full` reports `-analyzeduration ... (default 0)`, and
+`avformat.h:1540` says *"Can be set to 0 to let avformat choose using a
+heuristic."* So zero does not mean "skip analysis" — it means "use the
+heuristic", which happens anyway. **The line set the value to the value it
+already had**, and M1's comment was wrong on both counts. Deleted.
+
+`probesize` = 32768 is honestly 2^15 picked to be small. The default is 5 MB
+(~39 s of data at this stream's ~128 KB/s), but it is a **cap, not a target** —
+`avformat_find_stream_info` stops as soon as it knows the format. So it bounds
+the worst case rather than speeding up the normal one, which is a weaker
+justification than M1's comment implied.
+
+Also found, not adopted: the RTSP demuxer exposes `-buffer_size` (the socket
+buffer lever) and `-timeout` (FFmpeg's own socket timeout). `timeout` is **not**
+a substitute for our interrupt callback — it only knows a clock, so it could
+never answer the stop flag.
+
+*Caveat recorded:* those defaults were read from ffmpeg 8.1.1
+(`libavformat 62.12.101`) on PATH, not from our pinned build
+(`libavformat 63.6.100`).
+
+### Two bugs caught reviewing the typed-in `.cpp`
+
+1. **A missing `return` after the `avcodec_receive_frame` error log.** A genuine
+   decode failure would log and fall through to read another packet, so
+   `DecodeNext()` keeps returning `NoFrameYet`, the worker never sees `Error`,
+   never reconnects, and the log repeats every iteration forever.
+2. **`avcodec_parameters_to_context()` omitted.** `avcodec_alloc_context3` gives
+   a blank context knowing only the codec type; this call copies width, height,
+   pixel format and `extradata` (HEVC's VPS/SPS/PPS). **The more dangerous of
+   the two, because it may appear to work** — RTSP usually carries those
+   parameter sets in-band, so the decoder often recovers at the next keyframe,
+   giving a picture that is merely later and less reliable, with no error to
+   point at.
+
+Both fixed.
+
+### The teaching rules from Session 11 were used for the first time, and worked
+
+Chunks 2 through 11 ran under the six rules: one idea per chunk, concept before
+code, a specific question or restatement at the end of each, no typing until the
+assemble step. No chunk needed a second pass. Sanjyot's own questions during it
+produced two of this session's findings — the `analyzeduration` no-op, and the
+packets/frames-are-1:1-in-count correction.
+
+Two process points confirmed along the way:
+
+- **He types the code once, at the assemble step, not chunk by chunk.** His
+  reasoning: typing incrementally is transcription; typing the whole file once
+  from a complete picture is a revision pass. Recorded in `CLAUDE.md` rule 3.
+- **The walkthrough docs get the same simplification treatment as chat**, by his
+  test: *"no point reading 500 words if 50 words can do the same job — but I
+  said 'same job', not 'similar'."* Cut restatement, never cut a "why", an
+  alternative that lost, or a line number that makes a claim checkable.
+
+### Next action
+
+**Compile.** Nothing calls the session yet, so it builds as dead code — which is
+exactly the point: it is a real check that the includes and every signature are
+right, before the worker goes on top.
+
+Then **work-order item 3, the worker** — the `FRunnable`: the loop, and the
+four-step shutdown in its destructor (flag -> interrupt -> `WaitForCompletion()`
+-> `Kill`/free). Item 2 (the stop flag in the interrupt callback) was absorbed
+into item 1, as planned.

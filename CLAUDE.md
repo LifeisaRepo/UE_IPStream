@@ -140,12 +140,38 @@ failure paths.
   1. **The FFmpeg session object** — owns `AVFormatContext`, `AVCodecContext`
      and the interrupt struct; open / read-and-decode / close. Per D15 this is
      its own type, not loose members on the player: the boundary is that only
-     the worker thread touches it. **Start here.**
-  2. **The stop flag in the interrupt callback.** M1's callback
-     (`IPStreamSpike.cpp:30-33`) knows only a wall-clock deadline, so after a
-     `Close()` it keeps answering "keep going" until that deadline expires. It
-     must read a stop flag too. Small, and the entire shutdown design rests on
-     it — do it early, never as an afterthought.
+     the worker thread touches it.
+     **DONE (2026-09-18) — `.h` and `.cpp` both written and reviewed, NOT YET
+     COMPILED.** `FIPStreamFFmpegSession`, at
+     `Private/IPStreamFFmpegSession.{h,cpp}`, typed in by Sanjyot. Compiling it
+     is the next action: nothing calls it yet, so it builds as dead code, which
+     is the check that every include and signature is right before the worker
+     goes on top. Call-by-call reasoning in `M2ThreadingWalkthrough.md` §1–7.
+     Settled along the way: **`std::atomic`, not `TAtomic`**
+     (`Templates/Atomic.h:13` — Epic plans to deprecate `TAtomic`; Glossary §10
+     carries the note), `UE_NONCOPYABLE`, a five-value `EIPStreamDecodeResult`,
+     `relaxed` memory ordering on the flag, `DecodeNext()` asking the decoder
+     for a frame *before* reading a packet (which makes `EAGAIN` from
+     `avcodec_send_packet` unreachable — the case M1's order silently drops a
+     packet on), 6.0 s connect / 2.0 s read timeouts, and **`Close()`
+     deliberately not resetting the stop flag** (`Close()` ends a connection;
+     `RequestStop()` ends the worker).
+     **The stop flag is declared on the session rather than on the
+     `FRunnable`** — the interrupt callback gets exactly one `void*`
+     (`avio.h:60`), so putting the flag there makes that pointer `this`. Note
+     for the interview answer: that is not better *in general*; it is better
+     given a C library reaching us through one opaque pointer. Without FFmpeg
+     the flag belongs on the `FRunnable`, where ImgMedia puts it.
+     **`analyzeduration` was deleted from the options dictionary** — its default
+     is already `0`, and `avformat.h:1540` says `0` means "let avformat choose
+     using a heuristic", so M1's line set the value to the value it already had
+     and M1's comment was wrong. `probesize`'s 32768 is honestly a chosen power
+     of two, not a derived number; it caps the worst case rather than speeding
+     up the normal one.
+  2. ~~**The stop flag in the interrupt callback.**~~ **ABSORBED INTO ITEM 1,
+     done 2026-09-18.** The flag lives on the session, and
+     `FIPStreamFFmpegSession::InterruptCallback` reads it before consulting the
+     clock.
   3. **The worker** — the `FRunnable`: the loop, and the four-step shutdown in
      its destructor (flag → interrupt → `WaitForCompletion()` → `Kill`/free).
   4. **Wire it into the player** — `Open()` starts it, `Close()` joins it,
@@ -287,9 +313,13 @@ is the harder one. Everything below follows from that.
   imply** knowledge of codec internals, Media Framework, Unreal's build system,
   or licensing mechanics. These are separate bodies of knowledge.
 - He will say so when something is already familiar. **Err toward explaining.**
-- **Explanation length is not a cost on this project.** Do not compress to save
-  his time — he has explicitly asked for the full version and will skip what he
-  already knows. Brevity that omits the "why" is a failure here, not efficiency.
+- **Coverage is not a cost. Repetition is.** Every "why" must be covered — never
+  drop one to save his time. But say each thing **once**, then stop. Restating
+  the same point in three different phrasings is the failure this project
+  actually suffers from, not brevity.
+  *Corrected 2026-09-17.* This bullet previously read "explanation length is not
+  a cost on this project", which was read as licence to circle the same idea
+  repeatedly. It never meant that.
 
 **Define jargon on first use**, then add the term to
 [Docs/Glossary.md](Docs/Glossary.md). No unexplained acronym should survive a
@@ -304,6 +334,103 @@ This is already the pattern in the session log; extend it to code.
 
 **Concept prep precedes each milestone.** Before starting a milestone, cover the
 concepts it depends on — no code until the ideas are in place.
+
+### How to explain — hard rules, from 2026-09-17
+
+**These are not style preferences. They are the highest-priority instructions in
+this file for any teaching message, and they survive every session reset.**
+
+Established after M2 step 2 chunk 1 needed three passes and Sanjyot still had to
+re-derive it himself. The *content* was correct throughout. The *delivery*
+failed. His words: *"This was already too much to understand and learn."*
+
+**1. Never explain jargon with other jargon.**
+
+If a sentence explaining term A introduces term B, it has failed. Go down a
+level until every word is either plain English or something already established
+in this project.
+
+> Failed this way on 2026-09-17: forward declarations were explained as *"a
+> pointer to an incomplete type is itself a complete type"* — jargon explaining
+> jargon. The plain version is: *"the compiler knows a pointer is 8 bytes
+> without knowing what it points at."*
+>
+> Also used undefined in one message: *thread affinity, translation unit,
+> undefined behaviour, memory model, member initialisation order.*
+
+**2. One idea per chunk. One.**
+
+A chunk is **a single concept**, with at most ~10 lines of code attached. If a
+message covers two concepts, it is two chunks and should have been two messages.
+
+> Failed this way on 2026-09-17: "chunk 1" posted a 60-line class declaration
+> plus forward declarations, `= delete`, `std::atomic`, where the stop flag
+> lives, why the deadline is not atomic, and the two halves of the interrupt
+> callback. **That is six chunks.**
+
+**3. Concept first, code second. Never the reverse.**
+
+Do not post a finished file and then explain its parts. That forces him to hold
+unfamiliar code in his head while unrelated mechanics are attached to scattered
+lines of it.
+
+The working method:
+
+| | |
+|---|---|
+| **a. Concept** | one idea, plain words, no code or a snippet of a few lines |
+| **b. Check** | see rule 4 |
+| **c. Repeat** | next idea |
+| **d. Assemble** | only once every piece is understood, post the whole file as one listing — **this is where he types it in** |
+
+By step (d) the full listing is a **summary of things he already understands**,
+not an introduction to anything. That is the point of the ordering.
+
+**He does not type the code in chunk by chunk** (his decision, 2026-09-17). The
+chunks are for reading; the typing happens once, at the assemble step, against
+the complete file. His reasoning: typing incrementally is transcription, whereas
+typing the whole thing once from a complete picture is a revision pass. So do
+not ask him to type after each chunk, and do post the full listing at the end
+even when every line of it has already appeared in a chunk.
+
+**4. Check with a question, not "does that make sense?"**
+
+A yes/no question gets a reflexive yes and diagnoses nothing. End a chunk with
+either a specific one-line question, or a request to restate it in his own
+words. **Asking for a restatement routinely is confirmed welcome (2026-09-17)
+— use it, and use it on anything non-trivial.**
+
+> What actually worked on 2026-09-17 was Sanjyot restating the whole thing
+> unprompted. That single message exposed four misunderstandings. Nothing before
+> it had diagnosed anything. **Ask for the restatement rather than waiting for
+> it.**
+
+**5. When he says he does not understand, go down a level — do not re-explain.**
+
+Re-explaining the same idea with more words makes it worse.
+
+> Failed this way on 2026-09-17: the second pass was *longer* than the first.
+
+**6. Fewest words, simplest words.** Straight and to the point. Rules 1–5 do the
+real work; this one is the tiebreaker when a sentence could be shorter.
+
+**The walkthrough docs get the same treatment** (confirmed 2026-09-17). They are
+exempt only from the chunking rules, which are about pacing a conversation — not
+from rules 1 and 6. His test, in his words:
+
+> *"There is no point in reading 500 words if 50 words can do the same job. But
+> I said 'same job', not 'similar'."*
+
+So: cut every word that is restatement, hedging, or a second phrasing of a point
+already made. **Do not cut a word that carries context** — the "why", the
+alternative that lost, the condition that reopens it, the line number that makes
+a claim checkable. If shortening would lose any of that, or would force jargon
+back in to save space, **leave it long.** Subtraction that costs content is a
+worse failure than length.
+
+**What all of this is for:** he must be able to defend **every design decision
+and every line of code** in an interview. A message he cannot follow contributes
+nothing to that, regardless of how correct it is.
 
 ### Where the study notes live — LOCAL ONLY, not in the repo
 

@@ -94,7 +94,7 @@ UTexture2D* UIPStreamSpike::GrabOneFrame(const FString& RtspUrl)
 	AVDictionary* Options = nullptr;
 	av_dict_set(&Options, "rtsp_transport", "tcp", 0);		// Using TCP for RTSP
 	av_dict_set(&Options, "probesize", "32768", 0);			// 32KB probe size
-	av_dict_set(&Options, "analyzeduration", "0", 0);		// No analysis duration (we want the first frame ASAP)
+	av_dict_set(&Options, "analyzeduration", "0", 0);		// Useless code - default is already 0, but it doesn't disable analysis - it lets avformat choose what to do.
 
 	if (avformat_open_input(&FormatContext, UrlUtf8.Get(), nullptr, &Options) < 0)
 	{
