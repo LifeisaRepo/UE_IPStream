@@ -480,6 +480,44 @@ already on GitHub.
 Open-time FFmpeg options to plan for: `rtsp_transport=tcp`, socket timeout,
 `fflags=nobuffer`, `flags=low_delay`, small `probesize` / `analyzeduration`.
 
+### Reconnect policy — D16
+
+**Who decides when to give up: the user, per media source.** One option key,
+`MaxReconnectAttempts`:
+
+| Value | Behaviour |
+|---|---|
+| `0` (default) | retry forever, at the capped backoff interval |
+| *N* | give up after *N* failed attempts and report `Failed` |
+
+`0` is the default because the demo is a surveillance monitor on a camera that is
+expected to come and go: an end-of-stream usually means the server closed the
+session (reboot, NVR drop, network blip), not that the stream is gone for good.
+Retrying forever is cheap — one connect attempt per interval — and never blocks
+shutdown, because `Close()` interrupts the wait (`M2DesignDerivation.md` Q5).
+
+**How the user sets it, with no C++ and no new asset type.** `UMediaSource`
+already exposes BlueprintCallable option setters — "SetMediaOption (integer64)"
+and friends, `MediaSource.h:174-186` — and the source object itself is handed to
+the player as its `IMediaOptions`
+(`MediaPlayer.cpp:677`: `PlayerFacade->Open(MediaSource->GetUrl(), MediaSource, PlayerOptions)`).
+So two Blueprint nodes before "Open Source" configure any stock
+`UStreamMediaSource`.
+
+**The cost, accepted:** that option map is a plain `TMap`, not a `UPROPERTY`
+(`MediaSource.h:190`), so values are runtime-only. They are not saved in the
+asset and do not appear in the details panel.
+
+**Deferred, and explicitly optional if it ships:** our own `UMediaSource`
+subclass, which would give the same values as saved fields in the details panel.
+A later version, never a requirement — the plugin must stay fully usable with the
+stock media source.
+
+**The worker never ends itself.** Every decode result except `Aborted` means
+"this connection is over", not "the worker is over". Only the owner ends the
+worker, through `Stop()`. Hitting `MaxReconnectAttempts` is the single exception,
+and it is a user-chosen limit rather than the worker's own judgement.
+
 ---
 
 ## 9. Packaging

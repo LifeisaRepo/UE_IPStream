@@ -40,9 +40,10 @@ enum class EIPStreamDecodeResult : uint8
  * Owns one FFmpeg connection to one stream: demux, decode, and the
  * interrupt state that makes both of them interruptible.
  * 
- * THREAD AFFINITY: every member of this class is worker-thread only,
- * with the exception of RequestStop() and IsStopRequested() which can
- * be called from any thread. This is why bStopRequested is atomic.
+ * THREAD AFFINITY: while the worker thread runs, every member is
+ * worker-thread only, except RequestStop() and IsStopRequested(), which any
+ * thread may call (hence bStopRequested is atomic). Before the thread starts
+ * and after it has been joined, the owning thread may use it.
  */
 class FIPStreamFFmpegSession
 {

@@ -756,6 +756,31 @@ someone calls `Trigger()` or the timeout expires — returning `true` if trigger
 **`Trigger()` carries no payload**, only a nudge, which is why "wake up" and
 "here is what changed" must always be two separate mechanisms.
 
+**Auto-reset vs manual-reset event** (`EEventMode`, `Event.h:127`). An
+**auto-reset** event wakes one waiter per `Trigger()`, then returns to "not rung"
+by itself. If nobody is waiting, it stays rung until the next `Wait`, which
+returns at once and uses the ring up. A **manual-reset** event stays rung until
+someone calls `Reset()`, so every `Wait` returns immediately until then. This
+project's backoff event is auto-reset: one ring gives one early wake.
+
+**`FEventRef`** (`Event.h:134`). An `FEvent` that manages itself. It takes an
+event from the engine's pool when it is created and gives it back when it is
+destroyed (`ThreadingBase.cpp:700-720`), so there are no manual
+`GetSynchEventFromPool` / `ReturnSynchEventToPool` calls to forget. `Event.h:18`
+recommends it over a raw `FEvent*`. Use it with `->`, like a pointer:
+`BackoffEvent->Wait(...)`.
+
+**Backoff** — waiting between retry attempts, usually longer after each failure
+so a device that is down is not hammered. Ours: 1 s after a good connection
+drops, then 2, 4, 8 s, capped at 8 s, reset only by a connection that delivered
+a frame (`M2ThreadingWalkthrough.md` §8). The wait is on an `FEvent`, not a
+sleep, so a stop cuts it short (`M2DesignDerivation.md` Q5).
+
+**`final`** (C++ keyword, on a class) — no other class may inherit from this one.
+Used on `FIPStreamDecodeWorker` because it starts its thread in its own
+constructor: a subclass's parts would be built *after* the thread was already
+running and able to reach them.
+
 **`TAtomic<T>`** — a value that can be read and written from several threads
 without tearing or reordering surprises. The correct type for a stop flag.
 *Not* the same as `volatile`, which only stops the compiler caching a value in a
