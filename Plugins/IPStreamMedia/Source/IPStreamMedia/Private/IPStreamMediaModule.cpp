@@ -30,7 +30,7 @@ public:
 
 	virtual void StartupModule() override
 	{
-		UE_LOG(LogIPStreamMedia, Log, TEXT("IPStreamMedia module has started"));
+		UE_LOG(LogIPStreamMedia, Log, TEXT("IPStreamMedia module has started. ^_^"));
 
 #if WITH_FFMPEG
 		LoadFFmpegLibraries();
@@ -42,17 +42,29 @@ public:
 #if WITH_FFMPEG
 		UnloadFFmpegLibraries();
 #endif
-		UE_LOG(LogIPStreamMedia, Log, TEXT("IPStreamMedia module has shut down"));
+		UE_LOG(LogIPStreamMedia, Log, TEXT("IPStreamMedia module has shut down. ^_^"));
 	}
 
 	//~ IIPStreamMediaModule interface
 
 	virtual TSharedPtr<IMediaPlayer, ESPMode::ThreadSafe> CreatePlayer(IMediaEventSink& EventSink) override
 	{
+		// Editor will crash on worker's first FFmpeg call if all the DLLs are not loaded.
+		// Returning nullptr is safer here instead, the facade will turn this nullptr into a failed open.
+		if (!bFFmpegLoaded)
+		{
+			UE_LOG(LogIPStreamMedia, Error, TEXT("CreatePlayer: FFmpeg DLLs not loaded (see startup logs) - cannot create a player. -_-"));
+			return nullptr;
+		}
+
 		return MakeShared<FIPStreamPlayer, ESPMode::ThreadSafe>(EventSink);
 	}
 
 private:
+
+	// True only when all FFmpeg DLLs are loaded.
+	bool bFFmpegLoaded = false;
+
 #if WITH_FFMPEG
 	void LoadFFmpegLibraries()
 	{
@@ -70,15 +82,19 @@ private:
 			}
 			else
 			{
-				UE_LOG(LogIPStreamMedia, Error, TEXT("Failed to load %s from %s - FFmpeg decode will not be available."), DllName, *FFmpegBinPath);
+				UE_LOG(LogIPStreamMedia, Error, TEXT("Failed to load %s from %s - FFmpeg decode will not be available. -_-"), DllName, *FFmpegBinPath);
 			}
 		}
 
 		FPlatformProcess::PopDllDirectory(*FFmpegBinPath);
+
+		bFFmpegLoaded = (FFmpegDllHandles.Num() == UE_ARRAY_COUNT(GFFmpegDllNames));
 	}
 
 	void UnloadFFmpegLibraries()
 	{
+		bFFmpegLoaded = false;
+
 		// Reverse order on the way down is the general convention for unwinding
 		// something that is acquired on a stack. We are following this rule here even though
 		// Windows' refcounted LoadLibrary doesn't require it here.

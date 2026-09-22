@@ -53,6 +53,17 @@ private:
 	*/
 	void WaitBeforeReconnect();
 
+	
+
+	/* ~Constructor-only setters.
+	**************************************/
+	
+	const FString Url;						// Url of the stream
+	const int32 MaxReconnectAttempts;		// Max times the player should try to reconnect to the stream before giving up. 0 = retry forever.
+
+	/* ~Other members
+	**************************************/	
+
 	FIPStreamFFmpegSession Session;
 	FEventRef BackoffEvent{ EEventMode::AutoReset };	// Auto-reset is default. Written explicitly for readbility
 	FRunnableThread* Thread = nullptr;
@@ -65,10 +76,4 @@ private:
 	int32 ConsecutiveFailures = 0;			// Will stop reconnect attempts if > MaxReconnectAttempts
 	bool bGotFrameThisConnection = false;	// true if atleast one frame was successfully decoded after a connecting to a new stream.
 
-
-	/* ~Constructor-only setters.
-	**************************************/
-	
-	const FString Url;						// Url of the stream
-	const int32 MaxReconnectAttempts;		// Max times the player should try to reconnect to the stream before giving up. 0 = retry forever.
 };

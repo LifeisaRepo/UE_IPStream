@@ -781,6 +781,37 @@ Used on `FIPStreamDecodeWorker` because it starts its thread in its own
 constructor: a subclass's parts would be built *after* the thread was already
 running and able to reach them.
 
+**Member by value vs through a pointer** (C++). A member written without `*`
+(`FIPStreamFFmpegSession Session;`) *is* the object. The compiler builds it
+automatically as part of building the owner, **before the owner's constructor
+body runs**, in the order members are declared, and destroys it with the owner.
+A pointer member (`FRunnableThread* Thread`, or a smart pointer like
+`TUniquePtr`) is only an address. It starts empty, and the object is created
+separately (`Create()`, `MakeUnique`). C# and Blueprint object variables always
+behave like the pointer case. In C++ you only get it by asking for it.
+
+**Default constructor** — a constructor that takes no arguments. It's what lets
+a by-value member be built with nothing written for it, as `Session` is
+(`IPStreamFFmpegSession.h:51`). If a member's type has no default constructor,
+the owner must pass its arguments in the list after the `:` on the owner's
+constructor, as `Url(InUrl)` does, or the code does not compile.
+
+**Overload / ambiguous call** (C++). Overloads are several functions with the
+same name that differ only in their parameter types, like the five
+`IMediaOptions::GetMediaOption` (`IMediaOptions.h:38-74`). The compiler picks one
+by matching the types of the arguments you pass. If the argument matches none
+exactly but converts equally easily into two or more, the compiler refuses to
+choose: an **ambiguous call**, a compile error. A plain `0` is an `int` and does
+that against `bool` / `double` / `int64`, which is why engine code writes
+`(int64)0`.
+
+**Narrowing conversion** — putting a value into a smaller type that may not be
+able to hold it, e.g. `int64` into `int32`. Values that don't fit are silently
+changed, not rejected. MSVC's warning for it (C4244) is **switched off** in our
+build: UBT passes `/wd4244` unless `UnsafeTypeCastWarningLevel` is raised
+(`VCToolChain.cs:880-895`), and the default is `Off` (`TargetRules.cs:1591`).
+So the compiler says nothing.
+
 **`TAtomic<T>`** — a value that can be read and written from several threads
 without tearing or reordering surprises. The correct type for a stop flag.
 *Not* the same as `volatile`, which only stops the compiler caching a value in a

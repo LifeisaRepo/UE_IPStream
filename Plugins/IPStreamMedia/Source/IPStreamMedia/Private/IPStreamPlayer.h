@@ -10,6 +10,7 @@
 #include "Templates/SharedPointer.h"
 #include "Templates/UniquePtr.h"
 
+class FIPStreamDecodeWorker;
 class FMediaSamples;
 class IMediaEventSink;
 
@@ -91,5 +92,8 @@ private:
 
 	// Decoded sample queue, handed to the facade by GetSamples()
 	TUniquePtr<FMediaSamples> Samples;
+
+	// Decode thread
+	TUniquePtr<FIPStreamDecodeWorker> DecodeWorker;
 
 };

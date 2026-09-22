@@ -4,6 +4,8 @@
 
 #include "IIPStreamMediaModule.h"
 #include "IMediaEventSink.h"
+#include "IMediaOptions.h"
+#include "IPStreamDecodeWorker.h"
 #include "MediaSamples.h"
 #include "Misc/Guid.h"
 
@@ -52,13 +54,13 @@ FIPStreamPlayer::FIPStreamPlayer(IMediaEventSink& InEventSink): EventSink(InEven
 }
 
 /**
-* No code for now
-* Samples is released automatically. This just needs to be defined in .cpp
-* becuase we are forward-declaring FMediaSamples in the .h file.
-* To handle the release properly the destructor needs access to the header - which is declared in this file.
+* Joins the decode thread before the members are destroyed.
+* Close() is not called here as it sends an event to facade 
+* (not a good practice to touch other objects in the destructor) 
 */
 FIPStreamPlayer::~FIPStreamPlayer()
 {
+	DecodeWorker.Reset();
 }
 
 /*
@@ -74,13 +76,16 @@ void FIPStreamPlayer::Close()
 		return;
 	}
 
+	// Join the decode thread first, so samples are not added after the flush below
+	DecodeWorker.Reset();
+
 	CurrentUrl.Empty();
 	CurrentState = EMediaState::Closed;
 	Samples->FlushSamples();
 
 	EventSink.ReceiveMediaEvent(EMediaEvent::MediaClosed);
 
-	UE_LOG(LogIPStreamMedia, Display, TEXT("Player Closed"));
+	UE_LOG(LogIPStreamMedia, Display, TEXT("Close(): Player Closed. '_'"));
 }
 
 IMediaCache& FIPStreamPlayer::GetCache()
@@ -144,11 +149,26 @@ bool FIPStreamPlayer::Open(const FString& Url, const IMediaOptions* Options)
 		return false;
 	}
 
+	// 0 = Retry forever. 
+	// Use "Set Media Option (int64)" in blueprints to set a max limit before opening the media
+	// **NOTE:** MediaOption uses int64 here, but values > MAX_int32 will be clamped.
+	int64 MaxReconnectAttempts = 0;
+	if (Options)
+	{
+		MaxReconnectAttempts = Options->GetMediaOption(FName(TEXT("MaxReconnectAttempts")), (int64)0);
+	}
+
+	// The worker takes int32. So we clamp the value within the int32 range
+	const int32 ReconnectLimit = static_cast<int32>(FMath::Clamp(MaxReconnectAttempts, 0, MAX_int32));
+
+	DecodeWorker = MakeUnique<FIPStreamDecodeWorker>(Url, ReconnectLimit);
+
 	CurrentUrl = Url;
 	CurrentState = EMediaState::Stopped;
 
 	UE_LOG(LogIPStreamMedia, Display, TEXT("Player opened %s"), *RedactUrlCredentials(Url));
 
+	// TODO: Currently being sent before the worker has actually connected. 
 	EventSink.ReceiveMediaEvent(EMediaEvent::MediaOpened);
 
 	return true;

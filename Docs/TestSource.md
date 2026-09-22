@@ -1,13 +1,16 @@
 # M0 — Test Source Findings
 
-**Status:** In progress. Main stream fully characterized. Substream not yet checked.
-**Last updated:** 2026-08-22
+**Status:** Both streams characterized. **Phase 1 targets the secondary stream (`subtype=1`).**
+**Last updated:** 2026-09-22 (header only; findings below unchanged)
 
-Camera URL (main stream): `rtsp://admin:***@192.168.0.131:554/cam/realmonitor?channel=2&subtype=0`
+Camera URLs:
+
+- **Secondary — Phase 1 target:** `rtsp://admin:***@192.168.0.131:554/cam/realmonitor?channel=2&subtype=1` (720p, HEVC, GOP 2.0 s)
+- Primary — deferred: `rtsp://admin:***@192.168.0.131:554/cam/realmonitor?channel=2&subtype=0` (1080p, InstaStream, ~8 s GOP)
 
 Dahua-style RTSP URL scheme (`realmonitor` path is the signature). By convention,
-`subtype=0` is the main stream and `subtype=1` is the substream — **not yet
-verified for this camera.**
+`subtype=0` is the main stream and `subtype=1` is the substream — verified for this
+camera (see "Secondary stream" below).
 
 ---
 
