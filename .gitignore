@@ -86,3 +86,7 @@ DerivedDataCache/*
 
 # Some more docs
 Docs/IssuesAndWalkthroughs
+
+# Local project notes
+CLAUDE.md
+UE_IPStream_Session_Log.md

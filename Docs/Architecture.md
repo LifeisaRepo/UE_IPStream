@@ -92,7 +92,7 @@ decision.
 the camera restores manual control of its I-frame interval, which would make a
 1080p Phase-2-or-later comparison possible. **Not done now: this camera is
 shared via an NVR with at least one other active user, and reconfiguring it is
-not a one-person decision.** See [CLAUDE.md](../CLAUDE.md) — this constraint
+not a one-person decision.** See `CLAUDE.md` — this constraint
 applies to any future milestone that touches camera-side configuration, not just
 this decision.
 
@@ -616,7 +616,7 @@ that came out of it.
 **Status:** Blocks A and B done — FFmpeg's architecture and Unreal's build
 system (UBT, modules, `.Build.cs`, DLL loading and staging) both covered. (This
 line previously lagged the session log; corrected 2026-09-08 to match
-[the session log](../UE_IPStream_Session_Log.md)'s Current-state block, which
+the session log's Current-state block, which
 is the more current source.)
 
 ### M0 — one evening, before week 1: prove the stream outside Unreal
