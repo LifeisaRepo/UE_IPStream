@@ -1,9 +1,10 @@
 # IPStreamMedia — Architecture & Phase 1 Plan
 
-**Status:** Design agreed, implementation not started
+**Status:** M2 in progress — the player is registered and decodes on its own
+thread; frames into a `UMediaTexture` are next (§10)
 **Engine:** Unreal Engine 5.3
 **Platform:** Win64 only (Phase 1)
-**Last updated:** 2026-08-22
+**Last updated:** 2026-09-23
 
 ---
 
@@ -777,7 +778,7 @@ Settled. Reopen only on new technical evidence.
 | D12 | M3 (GPU conversion) is the designated cuttable milestone | Schedule insurance against shipping nothing |
 | D13 | D9's latest-frame-wins built on `IMediaPlayer`'s V2 timing model, not V1 | §7 — `FMediaSamples` already implements V2 sample selection; `SequenceIndex` fits D10 reconnects natively; Electra's own precedent |
 | D14 | `FIPStreamPlayer` **owns** a `TUniquePtr<FMediaSamples>`; implements the other four sub-interfaces directly | RTSP frames arrive sequentially, and FIFO is the right structure for sequentially-arriving data. Nothing in the engine inherits `FMediaSamples` — it is a component, not a base class. Reopens only if a Phase 2 D9 policy can't be expressed as queue configuration. `M2DesignDerivation.md` Q1 |
-| D15 | The decode loop runs on an owned `FRunnable` worker; `Close()` **joins** it, and M1's interrupt callback gains a stop flag so the join is bounded | A hard join (ImgMedia's pattern) is only unsafe while the worker is unreachable inside `av_read_frame`; the interrupt callback is the one wire that reaches it, and M1 measured its granularity at 39 ms. Electra's detached async teardown lost as **disproportionate** — it buys freedom from a millisecond-scale wait and charges nondeterministic teardown, a possible second RTSP session against a shared camera, and a crash risk unique to us (we `FreeDllHandle` FFmpeg by hand). Reopens if the join measures >~100 ms, if teardown stops being boundable (M3/hardware decode), on multi-stream, or if any blocking path ignores the callback. `M2DesignDerivation.md` Q4 |
+| D15 | The decode loop runs on an owned `FRunnable` worker; `Close()` **joins** it, and M1's interrupt callback gains a stop flag so the join is bounded | A hard join (ImgMedia's pattern) is only unsafe while the worker is unreachable inside `av_read_frame`; the interrupt callback is the one wire that reaches it, and M1 measured its granularity at 39 ms. Electra's detached async teardown lost as **disproportionate** — it buys freedom from a millisecond-scale wait and charges nondeterministic teardown, a possible second RTSP session against a shared camera, and a crash risk unique to us (we `FreeDllHandle` FFmpeg by hand). Reopens if the join measures >~100 ms, if teardown stops being boundable (M3/hardware decode), on multi-stream, or if any blocking path ignores the callback. **Measured 2026-09-22 (item 5): 1.5 ms when the worker waits in our own code, 37 ms median while streaming, 65 ms median while connecting, worst case 92.8 ms. Bounded, not open-ended: FFmpeg checks the interrupt callback every `POLLING_TIME 100` ms (`libavformat/network.h:249`). D15 stands; its original "single-digit milliseconds" expectation was wrong and is replaced by these numbers.** `M2DesignDerivation.md` Q4, Q7 |
 
 ---
 

@@ -19,10 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This license covers this repository's own source code only. Third-party
-components carry their own licenses — see
-`Plugins/IPStreamMedia/ThirdParty/FFmpeg/COPYING.LGPLv3` and the
-accompanying `NOTICE.md`.

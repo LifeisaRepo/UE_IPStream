@@ -32,8 +32,8 @@ against this build's own `LICENSE.txt`, not assumed from the flag name.
 Full text: [`COPYING.LGPLv3`](COPYING.LGPLv3) in this folder, copied
 verbatim from the downloaded build.
 
-Per this plugin's own `LICENSE.md`: this notice, and the LGPLv3 terms,
-apply to FFmpeg only. The plugin's own source code is MIT.
+This notice, and the LGPLv3 terms, apply to FFmpeg only. The plugin's own
+source code is MIT — see the repository's root `LICENSE.md`.
 
 ## Full configure line (`ffmpeg -buildconf`)
 
@@ -61,8 +61,8 @@ GNU-format libraries it links the imports as ordinary load-time imports and
 delay loading (the DLLs live in this folder rather than on the system path,
 and are loaded explicitly at module startup), so the result was a plugin
 that compiled and linked perfectly and then failed at editor startup with
-`Missing import: avutil-61.dll`. Full diagnosis:
-[`M1DelayLoadRCA.md`](../../../`M1DelayLoadRCA.md`).
+`Missing import: avutil-61.dll`. Full diagnosis: `M1DelayLoadRCA.md`
+(the author's study notes, not published in this repository).
 
 The four import libraries this plugin links were therefore regenerated from
 the `.def` files shipped in `lib/Win64/`, using MSVC's `lib.exe` (run from a
