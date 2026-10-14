@@ -57,10 +57,14 @@ uint32 FIPStreamDecodeWorker::Run()
 		}
 
 		ConsecutiveFailures = bGotFrameThisConnection ? 0 : ConsecutiveFailures + 1;
+		bEverGotFrame = bEverGotFrame || bGotFrameThisConnection;
 
-		if (MaxReconnectAttempts > 0 && ConsecutiveFailures >= MaxReconnectAttempts)
+		// If the first open fails, we allow an extra reconnect
+		const int32 FailureLimit = MaxReconnectAttempts + (bEverGotFrame ? 0 : 1);
+
+		if (MaxReconnectAttempts > 0 && ConsecutiveFailures >= FailureLimit)
 		{
-			UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: Run(): Gave up after %d attempts to reconnect. -_-"), ConsecutiveFailures);
+			UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: Run(): Gave up after %d attempts to reconnect. -_-"), MaxReconnectAttempts);
 			break;
 		}
 

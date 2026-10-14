@@ -8,6 +8,7 @@
 #include "IPStreamDecodeWorker.h"
 #include "MediaSamples.h"
 #include "Misc/Guid.h"
+#include "HAL/PlatformTime.h"
 
 namespace
 {
@@ -76,8 +77,14 @@ void FIPStreamPlayer::Close()
 		return;
 	}
 
+	// Time before join was requested - debug
+	const double JoinStartSeconds = FPlatformTime::Seconds();
+
 	// Join the decode thread first, so samples are not added after the flush below
 	DecodeWorker.Reset();
+
+	// Log time delta time for decode thread join in ms - debug
+	UE_LOG(LogIPStreamMedia, Display, TEXT("Close(): Decode thread joined in %.3f ms. 'o'."), (FPlatformTime::Seconds() - JoinStartSeconds) * 1000.0);
 
 	CurrentUrl.Empty();
 	CurrentState = EMediaState::Closed;

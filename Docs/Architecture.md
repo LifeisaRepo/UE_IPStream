@@ -489,7 +489,7 @@ Open-time FFmpeg options to plan for: `rtsp_transport=tcp`, socket timeout,
 | Value | Behaviour |
 |---|---|
 | `0` (default) | retry forever, at the capped backoff interval |
-| *N* | give up after *N* failed attempts and report `Failed` |
+| *N* | give up after *N* failed **reconnect** attempts and report `Failed`. The first open is not a reconnect, and a connection that delivers a frame resets the count |
 
 `0` is the default because the demo is a surveillance monitor on a camera that is
 expected to come and go: an end-of-stream usually means the server closed the

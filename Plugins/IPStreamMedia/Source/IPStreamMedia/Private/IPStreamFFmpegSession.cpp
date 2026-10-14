@@ -83,16 +83,30 @@ bool FIPStreamFFmpegSession::Open(const FString& Url)
 
 	if (OpenResult < 0)
 	{
-		UE_LOG(LogIPStreamMedia, Error, TEXT("Open: avformat_open_input() failed (ReturnCode = %d). Failed to open connection to the stream. -_-"), OpenResult);
+		if (OpenResult == AVERROR_EXIT && IsStopRequested())
+		{
+			UE_LOG(LogIPStreamMedia, Display, TEXT("Open: avformat_open_input() Stopped by request while connecting."));
+		}
+		else
+		{
+			UE_LOG(LogIPStreamMedia, Error, TEXT("Open: avformat_open_input() failed (ReturnCode = %d). Failed to open connection to the stream. -_-"), OpenResult);
+		}
 		Close();
 		return false;
 	}
 
 	SetDeadline(ConnectTimeoutSeconds);
-
-	if (avformat_find_stream_info(FormatContext, nullptr) < 0)
+	const int StreamInfoResult = avformat_find_stream_info(FormatContext, nullptr);
+	if (StreamInfoResult < 0)
 	{
-		UE_LOG(LogIPStreamMedia, Error, TEXT("Open: avformat_find_stream_info() failed. Failed to find stream info. -_-"));
+		if (StreamInfoResult == AVERROR_EXIT && IsStopRequested())
+		{
+			UE_LOG(LogIPStreamMedia, Display, TEXT("Open: avformat_find_stream_info() Stopped by request while connecting."));
+		}
+		else
+		{
+			UE_LOG(LogIPStreamMedia, Error, TEXT("Open: avformat_find_stream_info() failed (ReturnCode = %d). Failed to find stream info. -_-"), StreamInfoResult);
+		}
 		Close();
 		return false;
 	}
