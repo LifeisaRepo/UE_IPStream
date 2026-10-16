@@ -14,6 +14,8 @@ extern "C"
 #include "libavcodec/avcodec.h"
 #include "libavutil/avutil.h"
 #include "libavutil/dict.h"
+#include "libavutil/mathematics.h"
+#include "libswscale/swscale.h"
 }
 
 namespace
@@ -30,6 +32,16 @@ namespace
 	* We wait atmost till a new keyframe should potentially arrive. 
 	*/
 	constexpr double ReadTimeoutSeconds = 2.0;
+
+	// The unit of FTimespan: 100ns per tick. The target unit for av_rescale_q()
+	const AVRational UnrealTicks{ 1, static_cast<int>(ETimespan::TicksPerSecond) };
+
+	// A frame's duration only if neither frame not stream provides it. 40ms is 25FPS.
+	constexpr int64 FallbackDurationTicks = 40 * ETimespan::TicksPerMillisecond;
+
+	// How many frames of each connection get a FrameInfo log line.
+	constexpr int32 FramesToLog = 5;
+
 }
 
 //~ Ctor & Dtor
@@ -152,6 +164,20 @@ bool FIPStreamFFmpegSession::Open(const FString& Url)
 		return false;
 	}
 
+	// Tell the decoder what unit the packet timestamps are in.
+	const AVStream* VideoStream = FormatContext->streams[VideoStreamIndex];
+	CodecContext->pkt_timebase = VideoStream->time_base;
+
+	// Metadata GetFrameInfo() needs
+	TimebaseNum = VideoStream->time_base.num;
+	TimebaseDen = VideoStream->time_base.den;
+
+	const AVRational FrameRate = VideoStream->avg_frame_rate;
+
+	FramePeriod = (FrameRate.num > 0 && FrameRate.den > 0) 
+		? FTimespan(static_cast<int64>(FrameRate.den) * ETimespan::TicksPerSecond / FrameRate.num) 
+		: FTimespan::Zero();
+
 	// Setup the decoder in memory
 	if (avcodec_open2(CodecContext, Decoder, nullptr) < 0)
 	{
@@ -264,12 +290,22 @@ void FIPStreamFFmpegSession::Close()
 	// Reverse order of allocation.
 	// These functions also ensure that the variable is nullptr
 
+	sws_freeContext(ScaleContext);
+	ScaleContext = nullptr;
+
 	av_frame_free(&Frame);
 	av_packet_free(&Packet);
 	avcodec_free_context(&CodecContext);
 	avformat_close_input(&FormatContext);	// Closes stream, frees FormatContext and sets it to nullptr
 
 	VideoStreamIndex = INDEX_NONE;
+	TimebaseNum = 0;
+	TimebaseDen = 0;
+	FramePeriod = FTimespan::Zero();
+	bHaveLastFrame = false;
+	LastTime = FTimespan::Zero();
+	LastDuration = FTimespan::Zero();
+	FramesLogged = 0;
 	DeadlineSeconds = 0.0;
 
 	// DO NOT RESET bStopRequested HERE!
@@ -281,9 +317,105 @@ bool FIPStreamFFmpegSession::IsOpen() const
 	return FormatContext != nullptr;
 }
 
-const AVFrame* FIPStreamFFmpegSession::GetFrame() const
+bool FIPStreamFFmpegSession::GetFrameInfo(FIPStreamFrameInfo& OutInfo)
 {
-	return Frame;
+	if (!Frame || Frame->width <= 0 || Frame->height <= 0)
+	{
+		return false;
+	}
+
+	const bool bTimebaseKnown = TimebaseNum > 0 && TimebaseDen > 0;
+	const AVRational Timebase{ TimebaseNum, TimebaseDen };
+
+	// Time: PTS(Level 0), then best_effor_timestamp(Level 1), then last frame's time + duration(Level 2), then zero (Level 3)
+	int32 TimeLevel = 0;	// Used for logging only
+	int64 Pts = Frame->pts;
+	if (Pts == AV_NOPTS_VALUE)
+	{
+		Pts = Frame->best_effort_timestamp;
+		TimeLevel = 1;
+	}
+
+	FTimespan Time = FTimespan::Zero();
+	if (Pts != AV_NOPTS_VALUE && bTimebaseKnown)
+	{
+		Time = FTimespan(av_rescale_q(Pts, Timebase, UnrealTicks));
+	}
+	else if (bHaveLastFrame)
+	{
+		Time = LastTime + LastDuration;
+		TimeLevel = 2;
+	}
+	else
+	{
+		TimeLevel = 3;
+	}
+
+	// Duration: frame->duration, then the stream's frame period, then 40ms. Levels same as time
+	// Validity checks happen on FTimespan instead of the raw value as a positive raw value can still convert to zero.
+	int32 DurationLevel = 0;	// Used for logging only
+	FTimespan Duration = FTimespan::Zero();
+	if (Frame->duration && bTimebaseKnown)
+	{
+		Duration = FTimespan(av_rescale_q(Frame->duration, Timebase, UnrealTicks));
+	}
+	if (Duration <= FTimespan::Zero())
+	{
+		Duration = FramePeriod;
+		DurationLevel = 1;
+	}
+	if (Duration <= FTimespan::Zero())
+	{
+		Duration = FTimespan(FallbackDurationTicks);
+		DurationLevel = 2;
+	}
+
+	if (FramesLogged < FramesToLog)
+	{
+		++FramesLogged;
+
+		//colorspace: 1 = BT.709, 5 or 6 = BT.601, 2 = unspecified.
+		//range: 1 = limited("tv"), 2 = full, 0 = unspecified.
+		UE_LOG(LogIPStreamMedia, Display, TEXT("FrameInfo %d: pts = %lld best_effort = %lld duration = %lld time_base = %d / %d->Time = %lld ticks(level %d), Duration = %lld ticks(level %d), Colorspace=%d, Range=%d. ^_^ "),
+			FramesLogged, Frame->pts, Frame->best_effort_timestamp, Frame->duration, TimebaseNum, TimebaseDen, Time.GetTicks(), TimeLevel, Duration.GetTicks(), DurationLevel, static_cast<int32>(Frame->colorspace), static_cast<int32>(Frame->color_range));
+	}
+
+	LastTime = Time;
+	LastDuration = Duration;
+	bHaveLastFrame = true;
+
+	OutInfo.Dim = FIntPoint(Frame->width, Frame->height);
+	OutInfo.Time = Time;
+	OutInfo.Duration = Duration;
+
+	return true;
+}
+
+bool FIPStreamFFmpegSession::ConvertFrameToBGRA(uint8* Dst, int32 DstStride)
+{
+	if (!Frame || !Dst || DstStride <= 0 || Frame->width <= 0 || Frame->height <= 0)
+	{
+		return false;
+	}
+
+	// Reuses the ScaleContext while the frame's size and format stay the same.
+	// Rebuilds it if they change. Always keep what it returns, on rebuild the old pointer is freed automatically.
+	ScaleContext = sws_getCachedContext(ScaleContext,
+		Frame->width, Frame->height, static_cast<AVPixelFormat>(Frame->format),
+		Frame->width, Frame->height, AV_PIX_FMT_BGRA,
+		SWS_BILINEAR, nullptr, nullptr, nullptr);
+
+	if (!ScaleContext)
+	{
+		UE_LOG(LogIPStreamMedia, Error, TEXT("ConvertFrameToBGRA: sws_getCachedContext() failed. -_-"));
+		return false;
+	}
+
+	uint8* DstPlanes[1] = { Dst };
+	int32 DstStrides[1] = { DstStride };
+	const int OutputHeight = sws_scale(ScaleContext, Frame->data, Frame->linesize, 0, Frame->height, DstPlanes, DstStrides);
+
+	return OutputHeight == Frame->height;
 }
 
 //~ Thread boundary

@@ -208,6 +208,18 @@ I/O; return non-zero and it aborts the operation. *The only way to cancel a
 blocked `av_read_frame`.* Without it, closing a stream hangs whatever thread
 called it — and if that's the game thread, the whole editor freezes.
 
+**`AVRational`** — a fraction, stored as two whole numbers: `num` (top) and `den`
+(bottom) (`rational.h:58-61`). FFmpeg uses fractions instead of decimals for time,
+so that a value like one third is stored exactly and never drifts by rounding.
+`{1, 90000}` means 1/90000.
+
+**`time_base`** — an `AVRational` that says how long **one tick** of a stream's
+timestamps is, in seconds (`AVStream::time_base`, `avformat.h:807`). Example: with
+a `time_base` of `{1, 90000}`, one tick is 1/90000 s (about 11 microseconds), so a
+PTS of 180000 means 2 seconds. A PTS on its own is just a count of ticks, and it
+means nothing until you know the `time_base`. It lives on the stream, inside the
+session, which is why the worker cannot read it. *See also PTS (section 2).*
+
 **`probesize` / `analyzeduration`** — how much data FFmpeg reads before it decides
 it understands the stream. Defaults are tuned for files and add noticeable
 startup delay on a live stream; both get lowered here.
@@ -873,6 +885,35 @@ case when handing work to another thread.
 (Unreal's `std::function`). Needed because every lambda has a unique, unnameable
 compiler-generated type, so without the box you cannot declare a variable to hold
 one or a parameter to accept one.
+*Reading the shape:* `ReturnType(ParameterTypes)`. `TFunction<void(int32)>` holds
+anything that takes one `int32` and returns nothing; `TFunction<bool(const FString&)>`
+holds anything that takes a string and returns a `bool`.
+
+**`using Name = Type;` (type alias)** — gives an existing type a second, shorter
+name. Nothing new is created: wherever `Name` is written, the compiler reads
+`Type`. Used when a type is long and written more than once, e.g.
+`using FIPStreamSampleReadyFn = TFunction<void(const TSharedRef<IMediaTextureSample, ESPMode::ThreadSafe>&)>;`
+(the worker's hand-off type, written in the member and in the constructor).
+The older spelling of the same thing is `typedef Type Name;`.
+
+**`TSharedRef<T>`** — a `TSharedPtr` that can **never be empty**: it must point at
+something from the moment it exists. Same shared counter, same deleter rules.
+The pool's `AcquireShared()` returns one, and `AddVideo` takes one, because a
+sample that isn't there makes no sense at either point.
+
+**Pointer to const vs const pointer** — `const` applies to the thing just to its
+**left** (or to its right, if nothing is on its left). Read the declaration right
+to left:
+- `const FMediaSamples* P` — "P is a pointer to a `FMediaSamples` that is const":
+  the **queue** is read-only through `P`; `P` can be pointed elsewhere.
+- `FMediaSamples* const P` — "P is a const pointer to a `FMediaSamples`": `P`
+  **always points at this one queue**; the queue itself can be changed (so
+  non-const methods like `AddVideo` can be called).
+- `const FMediaSamples* const P` — both.
+In the player's `Open()`, `FMediaSamples* const SampleQueue` must allow
+`AddVideo`, so the queue can't be const; the `const` after `*` only states "this
+local always points at the same queue". Inside the lambda the captured copy is
+read-only anyway, so it is intent, not protection.
 
 **`TSharedPtr` / reference counting** — shared ownership. A counter sits beside
 the object; every copy of the pointer increments it, every destroyed copy

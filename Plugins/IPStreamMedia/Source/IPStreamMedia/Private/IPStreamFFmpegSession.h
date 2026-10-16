@@ -13,14 +13,15 @@ struct AVFormatContext;
 struct AVCodecContext;
 struct AVPacket;
 struct AVFrame;
+struct SwsContext;
 
 /**
-* Outcome of one FIPStreamFFmpegSession::DecodeNext() call.
+* @brief Outcome of one FIPStreamFFmpegSession::DecodeNext() call.
 * The worker loop branches on this.
 */
 enum class EIPStreamDecodeResult : uint8
 {
-	// A decoded frame is available from GetFrame(), until the next DecodeNext().
+	// A decoded frame is ready for GetFrameInfo() and ConvertFrameToBGRA(), until the next DecodeNext().
 	GotFrame,
 
 	// Packets were fed in, no frames came out yet. Normal. Call again.
@@ -37,10 +38,20 @@ enum class EIPStreamDecodeResult : uint8
 };
 
 /**
- * Owns one FFmpeg connection to one stream: demux, decode, and the
+ * @brief Metadata of the decoded frame that the worker needs to know about, saved in Unreal types.
+ */
+struct FIPStreamFrameInfo
+{
+	FIntPoint Dim = FIntPoint(0, 0);
+	FTimespan Time = FTimespan::Zero();
+	FTimespan Duration = FTimespan::Zero();
+};
+
+/**
+ * @brief Owns one FFmpeg connection to one stream: demux, decode, and the
  * interrupt state that makes both of them interruptible.
- * 
- * THREAD AFFINITY: while the worker thread runs, every member is
+ * @brief ---
+ * @brief THREAD AFFINITY: while the worker thread runs, every member is
  * worker-thread only, except RequestStop() and IsStopRequested(), which any
  * thread may call (hence bStopRequested is atomic). Before the thread starts
  * and after it has been joined, the owning thread may use it.
@@ -66,7 +77,11 @@ public:
 	bool IsOpen() const;
 
 	// Valid only after DecodeNext() returned GotFrame, until the next call
-	const AVFrame* GetFrame() const;
+	bool GetFrameInfo(FIPStreamFrameInfo& OutInfo);
+
+	// Converts the current frame to BGRA straight into Dst. DstStrides is the number of bytes per row.
+	// Valid only after DecodeNext() returned GotFrame, until the next call
+	bool ConvertFrameToBGRA(uint8* Dst, int32 DstStride);
 
 	
 	//~ Thread boundary - Following two functions are callable from any thread
@@ -90,6 +105,20 @@ private:
 	AVPacket* Packet = nullptr;
 	AVFrame* Frame = nullptr;
 	int32 VideoStreamIndex = INDEX_NONE;
+
+	SwsContext* ScaleContext = nullptr;
+
+	// Read once per connection on Open(). 0 means unknown.
+	int32 TimebaseNum = 0;
+	int32 TimebaseDen = 0;
+	FTimespan FramePeriod = FTimespan::Zero();
+
+	// Previous frame's info
+	bool bHaveLastFrame = false;
+	FTimespan LastTime = FTimespan::Zero();
+	FTimespan LastDuration = FTimespan::Zero();
+
+	int32 FramesLogged = 0;
 
 	// Set using SetDeadline() before a blocking call is called
 	double DeadlineSeconds = 0.0;

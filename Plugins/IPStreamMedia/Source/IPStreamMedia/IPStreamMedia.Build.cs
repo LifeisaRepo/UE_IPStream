@@ -21,10 +21,12 @@ public class IPStreamMedia : ModuleRules
 			{
 				"CoreUObject",
 				"Engine",
-				"FFmpeg",		// For FFmpeg integration
-				"Projects",		// For IPluginManager.h
-				"MediaUtils",	// For FMediaSamples
-			}
+				"FFmpeg",			// For FFmpeg integration
+				"Projects",			// For IPluginManager.h
+				"MediaUtils",		// For FMediaSamples
+				"RenderCore",		// For IMediaTextureSample
+				"ColorManagement",	// For IMediaTextureSample
+            }
 			);
 
 		DynamicallyLoadedModuleNames.AddRange(

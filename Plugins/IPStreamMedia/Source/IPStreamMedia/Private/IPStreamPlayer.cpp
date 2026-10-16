@@ -168,7 +168,12 @@ bool FIPStreamPlayer::Open(const FString& Url, const IMediaOptions* Options)
 	// The worker takes int32. So we clamp the value within the int32 range
 	const int32 ReconnectLimit = static_cast<int32>(FMath::Clamp(MaxReconnectAttempts, 0, MAX_int32));
 
-	DecodeWorker = MakeUnique<FIPStreamDecodeWorker>(Url, ReconnectLimit);
+	FMediaSamples* const SampleQueue = Samples.Get();
+	DecodeWorker = MakeUnique<FIPStreamDecodeWorker>(Url, ReconnectLimit,
+		[SampleQueue](const TSharedRef<IMediaTextureSample, ESPMode::ThreadSafe>& Sample)
+		{
+			SampleQueue->AddVideo(Sample);
+		});
 
 	CurrentUrl = Url;
 	CurrentState = EMediaState::Stopped;
@@ -192,6 +197,7 @@ bool FIPStreamPlayer::GetPlayerFeatureFlag(EFeatureFlag Flag) const
 	switch (Flag)
 	{
 	case IMediaPlayer::EFeatureFlag::UsePlaybackTimingV2:
+	case IMediaPlayer::EFeatureFlag::AlwaysPullNewestVideoFrame:
 		return true;
 	default:
 		break;
@@ -218,7 +224,7 @@ FTimespan FIPStreamPlayer::GetDuration() const
 
 float FIPStreamPlayer::GetRate() const
 {
-	return 0.0f;
+	return (CurrentState == EMediaState::Playing) ? 1.0f : 0.0f;
 }
 
 EMediaState FIPStreamPlayer::GetState() const
@@ -233,7 +239,14 @@ EMediaStatus FIPStreamPlayer::GetStatus() const
 
 TRangeSet<float> FIPStreamPlayer::GetSupportedRates(EMediaRateThinning Thinning) const
 {
-	return TRangeSet<float>();
+	TRangeSet<float> Rates;
+
+	// **NOTE** TRange syntax can be deceiving
+	// TRange<float>(1.0f); means [1.0 , 1.0] = 1.0 (range with single value)
+	// TRange<float>(1.0f, 1.0f); means [1.0 , 1.0) = 0.0 (empty range)
+	Rates.Add(TRange<float>(1.0f));	
+
+	return Rates;
 }
 
 FTimespan FIPStreamPlayer::GetTime() const
@@ -258,7 +271,13 @@ bool FIPStreamPlayer::SetLooping(bool Looping)
 
 bool FIPStreamPlayer::SetRate(float Rate)
 {
-	return false;
+	if (Rate != 1.0f || CurrentState == EMediaState::Closed )
+	{
+		return false;
+	}
+
+	CurrentState = EMediaState::Playing;
+	return true;
 }
 
 /*

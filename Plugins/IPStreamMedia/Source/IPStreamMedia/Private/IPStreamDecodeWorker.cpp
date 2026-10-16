@@ -15,14 +15,19 @@ namespace
 
 	// Will log stream status and progress after every ~10s @ 25fps
 	constexpr uint64 FramesPerProgressLog = 250;
+
+	// Will log the first and every Nth Skipped frame
+	// @see SkipFrame()
+	constexpr uint64 SkippedFramesPerLog = 100;
 }
 
 /* Ctor & Dtor
 **************************************/
 
-FIPStreamDecodeWorker::FIPStreamDecodeWorker(const FString& InUrl, int32 InMaxReconnectAttempts)
+FIPStreamDecodeWorker::FIPStreamDecodeWorker(const FString& InUrl, int32 InMaxReconnectAttempts, const FIPStreamSampleReadyFn& InOnSampleReady)
 	: Url(InUrl),
-	MaxReconnectAttempts(InMaxReconnectAttempts)
+	MaxReconnectAttempts(InMaxReconnectAttempts),
+	OnSampleReady(InOnSampleReady)
 {
 	// The thread starts here, and Run() might begin even before this constructor returns.
 	// So every member Run() uses must be built by this point.
@@ -89,6 +94,8 @@ void FIPStreamDecodeWorker::DecodeStream()
 		return;
 	}
 
+	++ConnectionIndex;		// Increment lap number on every new connection attempt.
+
 	while (!Session.IsStopRequested())		// one pass = one decode step (inner loop)
 	{
 		const EIPStreamDecodeResult DecodeResult = Session.DecodeNext();
@@ -96,6 +103,8 @@ void FIPStreamDecodeWorker::DecodeStream()
 		if (DecodeResult == EIPStreamDecodeResult::GotFrame)
 		{
 			++FramesDecoded;
+
+			HandOffFrame();
 
 			if (!bGotFrameThisConnection)
 			{
@@ -143,4 +152,49 @@ void FIPStreamDecodeWorker::WaitBeforeReconnect()
 
 	UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: Trying to reconnect after %d seconds... ~_~"), static_cast<int32>(DelaySeconds));
 	BackoffEvent->Wait(FTimespan::FromSeconds(DelaySeconds));
+}
+
+void FIPStreamDecodeWorker::HandOffFrame()
+{
+	// Frame's metadata
+	FIPStreamFrameInfo Info;
+	if (!Session.GetFrameInfo(Info))
+	{
+		SkipFrame(TEXT("GetFrameInfo"));
+		return;
+	}
+
+	// get an empty sample from the pool
+	const TSharedRef<FIPStreamTextureSample, ESPMode::ThreadSafe> Sample = SamplePool.AcquireShared();
+
+	// Create the sample's timestamp from the Info and the Lap number
+	// We use secondary sequence index for our lap number and UE generally uses it to represent
+	// looping, which reset the time in essence and hence it's a bit more similar to reconnection
+	// as compared to seeking, which is usually what the primary sequence index is used for.
+	const FMediaTimeStamp Time(Info.Time, FMediaTimeStamp::MakeSequenceIndex(0, ConnectionIndex));
+	if (!Sample->Initialize(Info.Dim, Time, Info.Duration))
+	{
+		SkipFrame(TEXT("Initialize"));
+		return;
+	}
+
+	// Pixel conversion
+	if (!Session.ConvertFrameToBGRA(Sample->GetMutableBuffer(), static_cast<int32>(Sample->GetStride())))
+	{
+		SkipFrame(TEXT("ConvertFrameToBGRA"));
+		return;
+	}
+
+	// Hand-off
+	OnSampleReady(Sample);
+}
+
+void FIPStreamDecodeWorker::SkipFrame(const TCHAR* Reason)
+{
+	++FramesSkipped;
+
+	if (FramesSkipped == 1 || FramesSkipped % SkippedFramesPerLog == 0)
+	{
+		UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: %s() failed, frame skipped (%llu skipped so far). -_-"), Reason, FramesSkipped);
+	}
 }

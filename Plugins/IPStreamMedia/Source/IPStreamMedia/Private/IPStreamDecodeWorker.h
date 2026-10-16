@@ -7,8 +7,11 @@
 #include "HAL/Runnable.h"
 
 #include "IPStreamFFmpegSession.h"
+#include "IPStreamTextureSample.h"
 
 class FRunnableThread;
+
+using FIPStreamSampleReadyFn = TFunction<void(const TSharedRef<IMediaTextureSample, ESPMode::ThreadSafe>&)>;
 
 /**
  * Runs one FIPStreamFFmpegSession on its own thread: connect, decode, and reconnect
@@ -23,7 +26,8 @@ class FIPStreamDecodeWorker final : public FRunnable
 public:
 
 	// InMaxReconnectAttempts: 0 = retry forever, N = try N times before giving up
-	FIPStreamDecodeWorker(const FString& InUrl, int32 InMaxReconnectAttempts = 0);
+	// InOnSampleReady: receives every finished sample, on the worker thread.
+	FIPStreamDecodeWorker(const FString& InUrl, int32 InMaxReconnectAttempts, const FIPStreamSampleReadyFn& InOnSampleReady);
 	virtual ~FIPStreamDecodeWorker();
 
 	// Object of this type cannot be copied or moved.
@@ -53,6 +57,18 @@ private:
 	*/
 	void WaitBeforeReconnect();
 
+	/**
+	 * @brief Turns the frame DecodeNext() produced into a sample and hands it over.
+	 * Must run before the next DecodeNext() call. Worker thread.
+	 */
+	void HandOffFrame();
+
+	/**
+	 * @brief Counts a frame that could not become a sample. Logs the first and every 100th. Worker thread.
+	 * @brief Frame skip might happen due to bad size, duration or conversion failure.
+	 */
+	void SkipFrame(const TCHAR* Reason);
+
 	
 
 	/* ~Constructor-only setters.
@@ -60,11 +76,13 @@ private:
 	
 	const FString Url;						// Url of the stream
 	const int32 MaxReconnectAttempts;		// Max times the player should try to reconnect to the stream before giving up. 0 = retry forever.
+	const FIPStreamSampleReadyFn OnSampleReady;
 
 	/* ~Other members
 	**************************************/	
 
 	FIPStreamFFmpegSession Session;
+	FIPStreamTextureSamplePool SamplePool;
 	FEventRef BackoffEvent{ EEventMode::AutoReset };	// Auto-reset is default. Written explicitly for readbility
 	FRunnableThread* Thread = nullptr;
 
@@ -76,5 +94,7 @@ private:
 	int32 ConsecutiveFailures = 0;			// Will stop reconnect attempts if > MaxReconnectAttempts
 	bool bGotFrameThisConnection = false;	// true if atleast one frame was successfully decoded after a connecting to a new stream.
 	bool bEverGotFrame = false;				// true once any connection has delivered a frame.
+	int32 ConnectionIndex = -1;				// Connection lap number.
+	uint64 FramesSkipped = 0;				// @see SkipFrame() for why a frame might be skipped.
 
 };
