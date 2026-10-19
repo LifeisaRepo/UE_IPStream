@@ -84,7 +84,7 @@ void FIPStreamPlayer::Close()
 	DecodeWorker.Reset();
 
 	// Log time delta time for decode thread join in ms - debug
-	UE_LOG(LogIPStreamMedia, Display, TEXT("Close(): Decode thread joined in %.3f ms. 'o'."), (FPlatformTime::Seconds() - JoinStartSeconds) * 1000.0);
+	UE_LOG(LogIPStreamMedia, Verbose, TEXT("Close(): Decode thread joined in %.3f ms. 'o'."), (FPlatformTime::Seconds() - JoinStartSeconds) * 1000.0);
 
 	CurrentUrl.Empty();
 	CurrentState = EMediaState::Closed;
@@ -148,6 +148,9 @@ IMediaView& FIPStreamPlayer::GetView()
 
 bool FIPStreamPlayer::Open(const FString& Url, const IMediaOptions* Options)
 {
+	// Open() game-thread cost Timer
+	const double OpenStartSeconds = FPlatformTime::Seconds();
+
 	Close();
 
 	if (Url.IsEmpty())
@@ -182,6 +185,8 @@ bool FIPStreamPlayer::Open(const FString& Url, const IMediaOptions* Options)
 
 	// TODO: Currently being sent before the worker has actually connected. 
 	EventSink.ReceiveMediaEvent(EMediaEvent::MediaOpened);
+
+	UE_LOG(LogIPStreamMedia, Verbose, TEXT("FIPStreamPlayer::Open(): returned in %.3f ms. 'o'"), (FPlatformTime::Seconds() - OpenStartSeconds) * 1000.0);
 
 	return true;
 }

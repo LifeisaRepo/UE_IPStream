@@ -90,6 +90,7 @@ private:
 	/* ~Worker-thread-only state
 	**************************************/
 
+	double ConnectStartSeconds = 0.0;		// Connection attempt timer
 	uint64 FramesDecoded = 0;
 	int32 ConsecutiveFailures = 0;			// Will stop reconnect attempts if > MaxReconnectAttempts
 	bool bGotFrameThisConnection = false;	// true if atleast one frame was successfully decoded after a connecting to a new stream.

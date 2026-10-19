@@ -4,6 +4,7 @@
 #include "IPStreamDecodeWorker.h"
 #include "IIPStreamMediaModule.h"
 #include "HAL/RunnableThread.h"
+#include "HAL/PlatformTime.h"
 
 namespace
 {
@@ -88,6 +89,7 @@ void FIPStreamDecodeWorker::Stop()
 void FIPStreamDecodeWorker::DecodeStream()
 {
 	bGotFrameThisConnection = false;
+	ConnectStartSeconds = FPlatformTime::Seconds();
 
 	if (!Session.Open(Url))
 	{
@@ -109,7 +111,7 @@ void FIPStreamDecodeWorker::DecodeStream()
 			if (!bGotFrameThisConnection)
 			{
 				bGotFrameThisConnection = true;
-				UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeStream(): First frame decoded on this connection (%llu frames decoded so far). ^_^"), FramesDecoded);
+				UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeStream(): First frame on connection %d, %.3f ms after connecting began (%llu frames decoded so far). ^_^"), ConnectionIndex, (FPlatformTime::Seconds() - ConnectStartSeconds) * 1000.0, FramesDecoded);
 			}
 			else if (FramesDecoded % FramesPerProgressLog == 0)
 			{
