@@ -18,6 +18,10 @@ FFmpeg binary, object, or source was altered.
   asset `ffmpeg-N-126455-gecc7eb519e-win64-lgpl-shared`
 - **Git commit:** `ecc7eb519e` (FFmpeg upstream)
 - **Build date:** 2026-09-07
+- **FFmpeg source code for this build:** FFmpeg at commit
+  [`ecc7eb519e`](https://github.com/FFmpeg/FFmpeg/tree/ecc7eb519e)
+  (official repository: <https://git.ffmpeg.org/ffmpeg.git>), built with the
+  scripts in [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds).
 
 This is a dev-snapshot build (BtbN publishes on every FFmpeg master push,
 not periodic version tags), so the git commit hash and build date above,
@@ -30,7 +34,9 @@ configured with `--enable-version3` (`--enable-gpl` is **not** set, so this
 stays in the LGPL family rather than becoming GPL). Confirmed directly
 against this build's own `LICENSE.txt`, not assumed from the flag name.
 Full text: [`COPYING.LGPLv3`](COPYING.LGPLv3) in this folder, copied
-verbatim from the downloaded build.
+verbatim from the downloaded build. LGPLv3 builds on the GNU GPL version 3 and
+asks for both texts to accompany the work, so [`COPYING.GPLv3`](COPYING.GPLv3)
+is here too, copied verbatim from FFmpeg's source at the commit above.
 
 This notice, and the LGPLv3 terms, apply to FFmpeg only. The plugin's own
 source code is MIT — see the repository's root `LICENSE.md`.
