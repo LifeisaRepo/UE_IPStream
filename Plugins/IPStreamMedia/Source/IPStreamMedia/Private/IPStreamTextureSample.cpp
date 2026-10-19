@@ -8,7 +8,7 @@ bool FIPStreamTextureSample::Initialize(FIntPoint InDim, FMediaTimeStamp InTime,
 {
 	if (InDim.X <= 0 || InDim.Y <= 0 || InDuration <= FTimespan::Zero())
 	{
-		UE_LOG(LogIPStreamMedia, Display, TEXT("FIPStreamTextureSample::Initialize - Failed to intialize sample. Either Dim <= 0 or Duration <= 0. "));
+		UE_LOG(LogIPStreamMedia, Verbose, TEXT("FIPStreamTextureSample::Initialize - Failed to intialize sample. Either Dim <= 0 or Duration <= 0. "));
 		return false;
 	}
 

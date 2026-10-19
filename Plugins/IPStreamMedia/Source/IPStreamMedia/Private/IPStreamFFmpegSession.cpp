@@ -355,7 +355,7 @@ bool FIPStreamFFmpegSession::GetFrameInfo(FIPStreamFrameInfo& OutInfo)
 	// Validity checks happen on FTimespan instead of the raw value as a positive raw value can still convert to zero.
 	int32 DurationLevel = 0;	// Used for logging only
 	FTimespan Duration = FTimespan::Zero();
-	if (Frame->duration && bTimebaseKnown)
+	if (Frame->duration > 0 && bTimebaseKnown)
 	{
 		Duration = FTimespan(av_rescale_q(Frame->duration, Timebase, UnrealTicks));
 	}

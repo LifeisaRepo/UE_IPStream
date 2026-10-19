@@ -29,7 +29,7 @@ public:
 	virtual FRHITexture* GetTexture() const override;
 	virtual FMediaTimeStamp GetTime() const override;
 	virtual bool IsCacheable() const override;
-	// Will be true by default in our case because live SDR video streams are usually in sRGB color space.
+	// Will be true by default in our case because live SDR video streams are BT.709, whose gamma curve is close to sRGB's.
 	virtual bool IsOutputSrgb() const override;
 
 private:
