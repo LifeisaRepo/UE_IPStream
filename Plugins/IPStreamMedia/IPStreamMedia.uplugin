@@ -1,15 +1,15 @@
-﻿{
+{
 	"FileVersion": 3,
 	"Version": 1,
-	"VersionName": "0.1",
+	"VersionName": "0.1-beta",
 	"FriendlyName": "IPStreamMedia",
 	"Description": "Media Framework player backend for live IP video streams (RTSP, Phase 1).",
-	"Category": "Media",
+	"Category": "Media Players",
 	"CreatedBy": "Life Is A Repo - Sanjyot Dahale",
 	"CreatedByURL": "https://sanjyotdahale.dev",
 	"DocsURL": "",
 	"MarketplaceURL": "",
-	"SupportURL": "",
+	"SupportURL": "sanjyot.code@gmail.com",
 	"CanContainContent": true,
 	"IsBetaVersion": true,
 	"IsExperimentalVersion": false,
@@ -19,13 +19,17 @@
 			"Name": "IPStreamMedia",
 			"Type": "RuntimeNoCommandlet",
 			"LoadingPhase": "Default",
-			"PlatformAllowList": [ "Win64" ]
+			"PlatformAllowList": [
+				"Win64"
+			]
 		},
 		{
 			"Name": "IPStreamMediaFactory",
 			"Type": "RuntimeNoCommandlet",
 			"LoadingPhase": "PostEngineInit",
-			"PlatformAllowList": [ "Win64" ]
+			"PlatformAllowList": [
+				"Win64"
+			]
 		}
 	]
 }

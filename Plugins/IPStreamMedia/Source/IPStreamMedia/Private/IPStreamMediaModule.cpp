@@ -76,7 +76,12 @@ private:
 
 		for (const TCHAR* DllName : GFFmpegDllNames)
 		{
-			if (void* Handle = FPlatformProcess::GetDllHandle(DllName))
+			// Given a path that exists, the engine works out the full path itself, finds the DLL's own dependencies in the folder we point it at and loads those first.
+			// If one is missing, it logs "Missing import: XYZ.dll".
+			// With a bare name, none of that runs, which will just result in a "does not exist" line.
+			const FString DllPath = FPaths::Combine(FFmpegBinPath, DllName);
+
+			if (void* Handle = FPlatformProcess::GetDllHandle(*DllPath))
 			{
 				FFmpegDllHandles.Add(Handle);
 			}

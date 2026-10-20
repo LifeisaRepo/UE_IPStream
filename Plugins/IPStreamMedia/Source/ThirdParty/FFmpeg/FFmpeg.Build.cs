@@ -43,6 +43,18 @@ public class FFmpeg : ModuleRules
 
                 RuntimeDependencies.Add(Path.Combine(BinPath, DllName));
             }
+
+            // We don't use this .dll directly but avcodec is dependent on it.
+            // Import is handled by avcodec directly, we don't need to link or delay-load it.
+            RuntimeDependencies.Add(Path.Combine(BinPath, "swresample-7.dll"));
+
+            // Licence texts travel with the DLLs, so a packaged build carries them too.
+            // LGPLv3 asks for both its own text and the GPLv3 text (see NOTICE.md).
+            foreach (string LicenceFile in new[] { "COPYING.LGPLv3", "COPYING.GPLv3", "NOTICE.md" })
+            {
+                RuntimeDependencies.Add(Path.Combine(FFmpegPath, LicenceFile));
+            }
+
             PublicDefinitions.Add("WITH_FFMPEG=1");
         }
         else

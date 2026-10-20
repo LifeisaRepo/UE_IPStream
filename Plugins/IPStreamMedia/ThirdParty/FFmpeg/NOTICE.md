@@ -1,7 +1,9 @@
 # FFmpeg — Third-Party Notice
 
 This plugin dynamically links against FFmpeg's shared libraries
-(`avutil`, `avcodec`, `avformat`, `swscale`). **FFmpeg itself is not
+(`avutil`, `avcodec`, `avformat`, `swscale`). Packaged builds also ship
+`swresample`: the plugin never calls it, but `avcodec-63.dll` itself imports
+`swresample-7.dll`, so `avcodec` cannot load without it. **FFmpeg itself is not
 modified** — every `.dll` in `bin/Win64/` is byte-for-byte the unmodified
 build described below.
 

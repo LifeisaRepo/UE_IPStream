@@ -7,6 +7,7 @@
 #include "Modules/ModuleInterface.h"
 #include "Modules/ModuleManager.h"
 #include "Misc/Guid.h"
+#include "Internationalization/Internationalization.h"	// for LOCTEXT
 
 DEFINE_LOG_CATEGORY_STATIC(LogIPStreamMediaFactory, Log, All);
 
