@@ -14,12 +14,17 @@ namespace
 	constexpr double FirstBackoffSeconds = 1.0;
 	constexpr double MaxBackoffSeconds = 8.0;
 
+	// Reconnect attempts allowed before a stream has ever played.
+	// MaxReconnectAttempts is only considered if the stream plays atleast once.
+	constexpr int32 FirstConnectAttempts = 2;
+
 	// Will log stream status and progress after every ~10s @ 25fps
 	constexpr uint64 FramesPerProgressLog = 250;
 
 	// Will log the first and every Nth Skipped frame
 	// @see SkipFrame()
 	constexpr uint64 SkippedFramesPerLog = 100;
+		
 }
 
 /* Ctor & Dtor
@@ -50,6 +55,11 @@ FIPStreamDecodeWorker::~FIPStreamDecodeWorker()
 	}
 }
 
+bool FIPStreamDecodeWorker::PollEvent(EMediaEvent& OutEvent)
+{
+	return PendingEvents.Dequeue(OutEvent);
+}
+
 uint32 FIPStreamDecodeWorker::Run()
 {
 	while (!Session.IsStopRequested())		// one pass = one connection (outer loop)
@@ -62,18 +72,27 @@ uint32 FIPStreamDecodeWorker::Run()
 			break;							// shut down requested
 		}
 
+		// We were playing and lost the stream. Once per outage.
+		if (bGotFrameThisConnection)
+		{
+			PendingEvents.Enqueue(EMediaEvent::PlaybackSuspended);
+		}
+
 		ConsecutiveFailures = bGotFrameThisConnection ? 0 : ConsecutiveFailures + 1;
 		bEverGotFrame = bEverGotFrame || bGotFrameThisConnection;
 
-		// If the first open fails, we allow an extra reconnect
-		const int32 FailureLimit = MaxReconnectAttempts + (bEverGotFrame ? 0 : 1);
+		// When to give up changes based on if its the first connection or not
+		const bool bGiveUp = bEverGotFrame
+			? (MaxReconnectAttempts > 0 && ConsecutiveFailures >= MaxReconnectAttempts)
+			: (ConsecutiveFailures >= FirstConnectAttempts);
 
-		if (MaxReconnectAttempts > 0 && ConsecutiveFailures >= FailureLimit)
+		if (bGiveUp)
 		{
-			UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: Run(): Gave up after %d attempts to reconnect. -_-"), MaxReconnectAttempts);
+			UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: Run(): Gave up after %d failed attempts in a row. -_-"), ConsecutiveFailures);
+			PendingEvents.Enqueue(bEverGotFrame ? EMediaEvent::PlaybackEndReached : EMediaEvent::MediaOpenFailed);
 			break;
 		}
-
+		
 		WaitBeforeReconnect();				// backoff before trying to reconnect
 	}
 
@@ -107,10 +126,14 @@ void FIPStreamDecodeWorker::DecodeStream()
 			++FramesDecoded;
 
 			HandOffFrame();
-
+			
 			if (!bGotFrameThisConnection)
 			{
 				bGotFrameThisConnection = true;
+
+				// Queued after HandOffFrame() so the first sample is already waiting when the event is processed.
+				PendingEvents.Enqueue(bEverGotFrame ? EMediaEvent::PlaybackResumed : EMediaEvent::MediaOpened);
+
 				UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeStream(): First frame on connection %d, %.3f ms after connecting began (%llu frames decoded so far). ^_^"), ConnectionIndex, (FPlatformTime::Seconds() - ConnectStartSeconds) * 1000.0, FramesDecoded);
 			}
 			else if (FramesDecoded % FramesPerProgressLog == 0)

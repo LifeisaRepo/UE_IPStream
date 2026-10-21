@@ -47,6 +47,8 @@ public:
 	
 	virtual bool GetPlayerFeatureFlag(EFeatureFlag Flag) const override;
 
+	virtual void TickInput(FTimespan DeltaTime, FTimespan Timecode) override;
+
 protected:
 
 	//~ IMediaControls interface
@@ -87,7 +89,7 @@ private:
 	// URL of the currently open stream. Empty when closed.
 	FString CurrentUrl;
 
-	// Playback state, driven only by Open() and Close() in our case
+	// Playback state. Game thread only: set by Open(), Close() and TickInput()
 	EMediaState CurrentState;
 
 	// Decoded sample queue, handed to the facade by GetSamples()

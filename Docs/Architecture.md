@@ -483,13 +483,23 @@ Open-time FFmpeg options to plan for: `rtsp_transport=tcp`, socket timeout,
 
 ### Reconnect policy — D16
 
-**Who decides when to give up: the user, per media source.** One option key,
-`MaxReconnectAttempts`:
+**Who decides when to give up on a stream that has played: the user, per media
+source.** One option key, `MaxReconnectAttempts`:
 
 | Value | Behaviour |
 |---|---|
 | `0` (default) | retry forever, at the capped backoff interval |
-| *N* | give up after *N* failed **reconnect** attempts and report `Failed`. The first open is not a reconnect, and a connection that delivers a frame resets the count |
+| *N* | give up after *N* failed **reconnect** attempts in a row and report `PlaybackEndReached` (player state `Error`). A connection that delivers a frame resets the count |
+
+**A stream that has never played gets a fixed 2 attempts, whatever the setting**,
+then reports `MediaOpenFailed` (state `Error`): about 14 s for an unreachable host,
+about 2 s for a server that refuses. Before a stream has ever worked, a failure most
+likely means a wrong URL, and retrying forever would hide it; after it has worked, a
+failure most likely means the network dropped. *(Amended in M4; the first version
+gave a never-played stream N + 1 attempts, so with the default it could never fail.)*
+
+While reconnecting, the player reports `PlaybackSuspended` once when a playing
+connection drops and `PlaybackResumed` at the first frame after it comes back.
 
 `0` is the default because the demo is a surveillance monitor on a camera that is
 expected to come and go: an end-of-stream usually means the server closed the
@@ -516,8 +526,8 @@ stock media source.
 
 **The worker never ends itself.** Every decode result except `Aborted` means
 "this connection is over", not "the worker is over". Only the owner ends the
-worker, through `Stop()`. Hitting `MaxReconnectAttempts` is the single exception,
-and it is a user-chosen limit rather than the worker's own judgement.
+worker, through `Stop()`. The two exceptions are the limits above: the fixed 2
+attempts for a stream that has never played, and the user's `MaxReconnectAttempts`.
 
 ---
 

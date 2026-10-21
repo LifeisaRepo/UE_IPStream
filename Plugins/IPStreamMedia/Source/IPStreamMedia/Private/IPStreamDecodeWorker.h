@@ -3,8 +3,10 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Queue.h"
 #include "HAL/Event.h"
 #include "HAL/Runnable.h"
+#include "IMediaEventSink.h"
 
 #include "IPStreamFFmpegSession.h"
 #include "IPStreamTextureSample.h"
@@ -32,6 +34,12 @@ public:
 
 	// Object of this type cannot be copied or moved.
 	UE_NONCOPYABLE(FIPStreamDecodeWorker);
+
+	/**
+	 * @brief Takes the oldest event the worker has queued for the player. Game thread only.
+	 * @return false when no event is waiting.
+	 */
+	bool PollEvent(EMediaEvent& OutEvent);
 
 
 	/* ~FRunnable Interface
@@ -85,6 +93,9 @@ private:
 	FIPStreamTextureSamplePool SamplePool;
 	FEventRef BackoffEvent{ EEventMode::AutoReset };	// Auto-reset is default. Written explicitly for readbility
 	FRunnableThread* Thread = nullptr;
+
+	// Events for the player. Spsc because only worker adds to the queue and player takes from it (PollEvent).
+	TQueue<EMediaEvent, EQueueMode::Spsc> PendingEvents;
 
 
 	/* ~Worker-thread-only state

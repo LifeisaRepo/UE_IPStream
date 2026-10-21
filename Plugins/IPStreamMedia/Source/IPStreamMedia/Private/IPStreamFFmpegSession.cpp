@@ -40,7 +40,7 @@ namespace
 	constexpr int64 FallbackDurationTicks = 40 * ETimespan::TicksPerMillisecond;
 
 	// How many frames of each connection get a FrameInfo log line.
-	constexpr int32 FramesToLog = 5;
+	constexpr int32 FramesToLog = 5;	
 
 }
 
@@ -95,9 +95,9 @@ bool FIPStreamFFmpegSession::Open(const FString& Url)
 
 	if (OpenResult < 0)
 	{
-		if (OpenResult == AVERROR_EXIT && IsStopRequested())
+		if (IsStopRequested())
 		{
-			UE_LOG(LogIPStreamMedia, Display, TEXT("Open: avformat_open_input() Stopped by request while connecting."));
+			UE_LOG(LogIPStreamMedia, Display, TEXT("Open: avformat_open_input() Stopped by request while connecting (ReturnCode = %d)."), OpenResult);
 		}
 		else
 		{
@@ -111,9 +111,9 @@ bool FIPStreamFFmpegSession::Open(const FString& Url)
 	const int StreamInfoResult = avformat_find_stream_info(FormatContext, nullptr);
 	if (StreamInfoResult < 0)
 	{
-		if (StreamInfoResult == AVERROR_EXIT && IsStopRequested())
+		if (IsStopRequested())
 		{
-			UE_LOG(LogIPStreamMedia, Display, TEXT("Open: avformat_find_stream_info() Stopped by request while connecting."));
+			UE_LOG(LogIPStreamMedia, Display, TEXT("Open: avformat_find_stream_info() Stopped by request while connecting (ReturnCode = %d)."), StreamInfoResult);
 		}
 		else
 		{
@@ -259,7 +259,7 @@ EIPStreamDecodeResult FIPStreamFFmpegSession::DecodeNext()
 		av_packet_unref(Packet);
 		return EIPStreamDecodeResult::NoFrameYet;
 	}
-
+	
 	// Send the new packet to decoder
 	const int SendResult = avcodec_send_packet(CodecContext, Packet);
 	

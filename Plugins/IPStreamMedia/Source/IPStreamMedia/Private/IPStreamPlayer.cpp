@@ -162,10 +162,10 @@ bool FIPStreamPlayer::Open(const FString& Url, const IMediaOptions* Options)
 	// 0 = Retry forever. 
 	// Use "Set Media Option (int64)" in blueprints to set a max limit before opening the media
 	// **NOTE:** MediaOption uses int64 here, but values > MAX_int32 will be clamped.
-	int64 MaxReconnectAttempts = 0;
+	int64 MaxReconnectAttempts = 3;
 	if (Options)
 	{
-		MaxReconnectAttempts = Options->GetMediaOption(FName(TEXT("MaxReconnectAttempts")), (int64)0);
+		MaxReconnectAttempts = Options->GetMediaOption(FName(TEXT("MaxReconnectAttempts")), (int64)3);
 	}
 
 	// The worker takes int32. So we clamp the value within the int32 range
@@ -179,13 +179,9 @@ bool FIPStreamPlayer::Open(const FString& Url, const IMediaOptions* Options)
 		});
 
 	CurrentUrl = Url;
-	CurrentState = EMediaState::Stopped;
+	CurrentState = EMediaState::Preparing;
 
 	UE_LOG(LogIPStreamMedia, Display, TEXT("Player opened %s"), *RedactUrlCredentials(Url));
-
-	// TODO: Currently being sent before the worker has actually connected. 
-	EventSink.ReceiveMediaEvent(EMediaEvent::MediaOpened);
-
 	UE_LOG(LogIPStreamMedia, Verbose, TEXT("FIPStreamPlayer::Open(): returned in %.3f ms. 'o'"), (FPlatformTime::Seconds() - OpenStartSeconds) * 1000.0);
 
 	return true;
@@ -209,6 +205,32 @@ bool FIPStreamPlayer::GetPlayerFeatureFlag(EFeatureFlag Flag) const
 	}
 
 	return IMediaPlayer::GetPlayerFeatureFlag(Flag);
+}
+
+void FIPStreamPlayer::TickInput(FTimespan DeltaTime, FTimespan Timecode)
+{
+	if (!DecodeWorker)
+	{
+		return;
+	}
+
+	EMediaEvent Event;
+	while (DecodeWorker->PollEvent(Event))
+	{
+		switch (Event)
+		{		
+		case EMediaEvent::MediaOpened:
+			CurrentState = EMediaState::Playing;
+			break;
+		case EMediaEvent::MediaOpenFailed:
+		case EMediaEvent::PlaybackEndReached:
+			CurrentState = EMediaState::Error;
+			break;		
+		default:
+			break;		// CurrentState will stay `Playing` on PlybackSuspended/PlaybackResumed
+		}
+		EventSink.ReceiveMediaEvent(Event);
+	}
 }
 
 /*
@@ -276,13 +298,8 @@ bool FIPStreamPlayer::SetLooping(bool Looping)
 
 bool FIPStreamPlayer::SetRate(float Rate)
 {
-	if (Rate != 1.0f || CurrentState == EMediaState::Closed )
-	{
-		return false;
-	}
-
-	CurrentState = EMediaState::Playing;
-	return true;
+	// Rate will only be 1.0: Playing once open, no pause
+	return Rate == 1.0f && (CurrentState == EMediaState::Preparing || CurrentState == EMediaState::Playing);
 }
 
 /*
