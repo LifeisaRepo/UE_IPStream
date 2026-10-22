@@ -24,6 +24,17 @@ namespace
 	// Will log the first and every Nth Skipped frame
 	// @see SkipFrame()
 	constexpr uint64 SkippedFramesPerLog = 100;
+
+	// Helper to create Track format for blueprints.
+	FMediaVideoTrackFormat MakeVideoFormat(const FIPStreamFrameInfo& Info, const FString& CodecName)
+	{
+		FMediaVideoTrackFormat Format;
+		Format.Dim = Info.Dim;
+		Format.FrameRate = static_cast<float>(1.0 / Info.Duration.GetTotalSeconds());
+		Format.FrameRates = TRange<float>(Format.FrameRate);	// single value range
+		Format.TypeName = CodecName;
+		return Format;
+	}
 		
 }
 
@@ -55,7 +66,7 @@ FIPStreamDecodeWorker::~FIPStreamDecodeWorker()
 	}
 }
 
-bool FIPStreamDecodeWorker::PollEvent(EMediaEvent& OutEvent)
+bool FIPStreamDecodeWorker::PollEvent(FIPStreamWorkerEvent& OutEvent)
 {
 	return PendingEvents.Dequeue(OutEvent);
 }
@@ -75,7 +86,7 @@ uint32 FIPStreamDecodeWorker::Run()
 		// We were playing and lost the stream. Once per outage.
 		if (bGotFrameThisConnection)
 		{
-			PendingEvents.Enqueue(EMediaEvent::PlaybackSuspended);
+			PendingEvents.Enqueue({ EMediaEvent::PlaybackSuspended, {} });
 		}
 
 		ConsecutiveFailures = bGotFrameThisConnection ? 0 : ConsecutiveFailures + 1;
@@ -89,7 +100,7 @@ uint32 FIPStreamDecodeWorker::Run()
 		if (bGiveUp)
 		{
 			UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: Run(): Gave up after %d failed attempts in a row. -_-"), ConsecutiveFailures);
-			PendingEvents.Enqueue(bEverGotFrame ? EMediaEvent::PlaybackEndReached : EMediaEvent::MediaOpenFailed);
+			PendingEvents.Enqueue({ bEverGotFrame ? EMediaEvent::PlaybackEndReached : EMediaEvent::MediaOpenFailed, {} });
 			break;
 		}
 		
@@ -125,14 +136,20 @@ void FIPStreamDecodeWorker::DecodeStream()
 		{
 			++FramesDecoded;
 
-			HandOffFrame();
+			FIPStreamFrameInfo Info;
+			if (!HandOffFrame(Info))
+			{
+				continue;
+			}
 			
 			if (!bGotFrameThisConnection)
 			{
 				bGotFrameThisConnection = true;
 
 				// Queued after HandOffFrame() so the first sample is already waiting when the event is processed.
-				PendingEvents.Enqueue(bEverGotFrame ? EMediaEvent::PlaybackResumed : EMediaEvent::MediaOpened);
+				// TracksChanged queued first so the facade has selected the track before MediaOpened reaches blueprints.
+				PendingEvents.Enqueue({ EMediaEvent::TracksChanged, MakeVideoFormat(Info, Session.GetCodecName()) });
+				PendingEvents.Enqueue({ bEverGotFrame ? EMediaEvent::PlaybackResumed : EMediaEvent::MediaOpened, {} });
 
 				UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeStream(): First frame on connection %d, %.3f ms after connecting began (%llu frames decoded so far). ^_^"), ConnectionIndex, (FPlatformTime::Seconds() - ConnectStartSeconds) * 1000.0, FramesDecoded);
 			}
@@ -179,14 +196,13 @@ void FIPStreamDecodeWorker::WaitBeforeReconnect()
 	BackoffEvent->Wait(FTimespan::FromSeconds(DelaySeconds));
 }
 
-void FIPStreamDecodeWorker::HandOffFrame()
+bool FIPStreamDecodeWorker::HandOffFrame(FIPStreamFrameInfo& OutInfo)
 {
 	// Frame's metadata
-	FIPStreamFrameInfo Info;
-	if (!Session.GetFrameInfo(Info))
+	if (!Session.GetFrameInfo(OutInfo))
 	{
 		SkipFrame(TEXT("GetFrameInfo"));
-		return;
+		return false;
 	}
 
 	// get an empty sample from the pool
@@ -196,22 +212,23 @@ void FIPStreamDecodeWorker::HandOffFrame()
 	// We use secondary sequence index for our lap number and UE generally uses it to represent
 	// looping, which reset the time in essence and hence it's a bit more similar to reconnection
 	// as compared to seeking, which is usually what the primary sequence index is used for.
-	const FMediaTimeStamp Time(Info.Time, FMediaTimeStamp::MakeSequenceIndex(0, ConnectionIndex));
-	if (!Sample->Initialize(Info.Dim, Time, Info.Duration))
+	const FMediaTimeStamp Time(OutInfo.Time, FMediaTimeStamp::MakeSequenceIndex(0, ConnectionIndex));
+	if (!Sample->Initialize(OutInfo.Dim, Time, OutInfo.Duration))
 	{
 		SkipFrame(TEXT("Initialize"));
-		return;
+		return false;
 	}
 
 	// Pixel conversion
 	if (!Session.ConvertFrameToBGRA(Sample->GetMutableBuffer(), static_cast<int32>(Sample->GetStride())))
 	{
 		SkipFrame(TEXT("ConvertFrameToBGRA"));
-		return;
+		return false;
 	}
 
 	// Hand-off
 	OnSampleReady(Sample);
+	return true;
 }
 
 void FIPStreamDecodeWorker::SkipFrame(const TCHAR* Reason)

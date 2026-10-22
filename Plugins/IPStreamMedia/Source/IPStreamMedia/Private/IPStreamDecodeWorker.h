@@ -7,6 +7,7 @@
 #include "HAL/Event.h"
 #include "HAL/Runnable.h"
 #include "IMediaEventSink.h"
+#include "IMediaTracks.h"
 
 #include "IPStreamFFmpegSession.h"
 #include "IPStreamTextureSample.h"
@@ -14,6 +15,16 @@
 class FRunnableThread;
 
 using FIPStreamSampleReadyFn = TFunction<void(const TSharedRef<IMediaTextureSample, ESPMode::ThreadSafe>&)>;
+
+/**
+ * @brief Single data block which can carry event updates from the worker to the player.
+ * Format is filled only for TracksChanged event, other events carry empty format
+ */
+struct FIPStreamWorkerEvent
+{
+	EMediaEvent Event;
+	FMediaVideoTrackFormat Format;
+};
 
 /**
  * Runs one FIPStreamFFmpegSession on its own thread: connect, decode, and reconnect
@@ -39,7 +50,7 @@ public:
 	 * @brief Takes the oldest event the worker has queued for the player. Game thread only.
 	 * @return false when no event is waiting.
 	 */
-	bool PollEvent(EMediaEvent& OutEvent);
+	bool PollEvent(FIPStreamWorkerEvent& OutEvent);
 
 
 	/* ~FRunnable Interface
@@ -68,8 +79,10 @@ private:
 	/**
 	 * @brief Turns the frame DecodeNext() produced into a sample and hands it over.
 	 * Must run before the next DecodeNext() call. Worker thread.
+	 * @param OutInfo The frame's info; valid when this returns true.
+	 * @return false if the frame was skipped.
 	 */
-	void HandOffFrame();
+	bool HandOffFrame(FIPStreamFrameInfo& OutInfo);
 
 	/**
 	 * @brief Counts a frame that could not become a sample. Logs the first and every 100th. Worker thread.
@@ -95,7 +108,7 @@ private:
 	FRunnableThread* Thread = nullptr;
 
 	// Events for the player. Spsc because only worker adds to the queue and player takes from it (PollEvent).
-	TQueue<EMediaEvent, EQueueMode::Spsc> PendingEvents;
+	TQueue<FIPStreamWorkerEvent, EQueueMode::Spsc> PendingEvents;
 
 
 	/* ~Worker-thread-only state

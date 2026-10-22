@@ -317,6 +317,11 @@ bool FIPStreamFFmpegSession::IsOpen() const
 	return FormatContext != nullptr;
 }
 
+FString FIPStreamFFmpegSession::GetCodecName() const
+{
+	return CodecContext ? FString(UTF8_TO_TCHAR(avcodec_get_name(CodecContext->codec_id))) : FString();
+}
+
 bool FIPStreamFFmpegSession::GetFrameInfo(FIPStreamFrameInfo& OutInfo)
 {
 	if (!Frame || Frame->width <= 0 || Frame->height <= 0)
@@ -408,6 +413,24 @@ bool FIPStreamFFmpegSession::ConvertFrameToBGRA(uint8* Dst, int32 DstStride)
 	if (!ScaleContext)
 	{
 		UE_LOG(LogIPStreamMedia, Error, TEXT("ConvertFrameToBGRA: sws_getCachedContext() failed. -_-"));
+		return false;
+	}
+
+	// Currently my test stream returns colorspace as 'undefined', but its a HD video stream. (and usually streams are HD+)
+	// So if the colorspace is not explicity set to BT.601 (meant for SD) we will always use BT.709 (meant for HD+)
+	const bool bIsBt601 = Frame->colorspace == AVCOL_SPC_BT470BG || Frame->colorspace == AVCOL_SPC_SMPTE170M;
+	const int* Coefficients = sws_getCoefficients(bIsBt601 ? SWS_CS_ITU601 : SWS_CS_ITU709);
+
+	// swscale: 1 = full.FFmpeg : limited = 1, full = 2. Map it, never copy it.
+	const int SrcFullRange = (Frame->color_range == AVCOL_RANGE_JPEG) ? 1 : 0;
+
+	// sws_setColorspaceDetails uses 16.16 fixed point system for floating point values (bright, cont, sat).
+	// 16-bits for whole number . 16-bits for fractional.
+	// (1 << 16) = 65536 = 1.0f
+	constexpr int NoChange = 1 << 16;
+	if (sws_setColorspaceDetails(ScaleContext, Coefficients, SrcFullRange, Coefficients, 1, 0, NoChange, NoChange ) < 0)
+	{
+		UE_LOG(LogIPStreamMedia, Error, TEXT("ConvertFrameToBGRA: sws_setColorspaceDetails() failed. -_-"));
 		return false;
 	}
 

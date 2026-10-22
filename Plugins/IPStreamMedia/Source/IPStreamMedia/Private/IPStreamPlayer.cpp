@@ -88,6 +88,8 @@ void FIPStreamPlayer::Close()
 
 	CurrentUrl.Empty();
 	CurrentState = EMediaState::Closed;
+	VideoFormat.Reset();
+	SelectedVideoTrack = INDEX_NONE;
 	Samples->FlushSamples();
 
 	EventSink.ReceiveMediaEvent(EMediaEvent::MediaClosed);
@@ -214,11 +216,14 @@ void FIPStreamPlayer::TickInput(FTimespan DeltaTime, FTimespan Timecode)
 		return;
 	}
 
-	EMediaEvent Event;
-	while (DecodeWorker->PollEvent(Event))
+	FIPStreamWorkerEvent Item;
+	while (DecodeWorker->PollEvent(Item))
 	{
-		switch (Event)
-		{		
+		switch (Item.Event)
+		{
+		case EMediaEvent::TracksChanged:
+			VideoFormat = Item.Format;
+			break;
 		case EMediaEvent::MediaOpened:
 			CurrentState = EMediaState::Playing;
 			break;
@@ -229,7 +234,7 @@ void FIPStreamPlayer::TickInput(FTimespan DeltaTime, FTimespan Timecode)
 		default:
 			break;		// CurrentState will stay `Playing` on PlybackSuspended/PlaybackResumed
 		}
-		EventSink.ReceiveMediaEvent(Event);
+		EventSink.ReceiveMediaEvent(Item.Event);
 	}
 }
 
@@ -315,17 +320,17 @@ bool FIPStreamPlayer::GetAudioTrackFormat(int32 TrackIndex, int32 FormatIndex, F
 
 int32 FIPStreamPlayer::GetNumTracks(EMediaTrackType TrackType) const
 {
-	return 0;
+	return (TrackType == EMediaTrackType::Video && VideoFormat.IsSet()) ? 1 : 0;
 }
 
 int32 FIPStreamPlayer::GetNumTrackFormats(EMediaTrackType TrackType, int32 TrackIndex) const
 {
-	return 0;
+	return IsVideoTrack(TrackType, TrackIndex) ? 1 : 0;
 }
 
 int32 FIPStreamPlayer::GetSelectedTrack(EMediaTrackType TrackType) const
 {
-	return INDEX_NONE;
+	return (TrackType == EMediaTrackType::Video) ? SelectedVideoTrack : INDEX_NONE;
 }
 
 FText FIPStreamPlayer::GetTrackDisplayName(EMediaTrackType TrackType, int32 TrackIndex) const
@@ -335,7 +340,7 @@ FText FIPStreamPlayer::GetTrackDisplayName(EMediaTrackType TrackType, int32 Trac
 
 int32 FIPStreamPlayer::GetTrackFormat(EMediaTrackType TrackType, int32 TrackIndex) const
 {
-	return INDEX_NONE;
+	return IsVideoTrack(TrackType, TrackIndex) ? 0 : INDEX_NONE;
 }
 
 FString FIPStreamPlayer::GetTrackLanguage(EMediaTrackType TrackType, int32 TrackIndex) const
@@ -350,18 +355,30 @@ FString FIPStreamPlayer::GetTrackName(EMediaTrackType TrackType, int32 TrackInde
 
 bool FIPStreamPlayer::GetVideoTrackFormat(int32 TrackIndex, int32 FormatIndex, FMediaVideoTrackFormat& OutFormat) const
 {
-	return false;
+	if (!IsVideoTrack(EMediaTrackType::Video, TrackIndex) || FormatIndex != 0)
+	{
+		return false;
+	}
+	OutFormat = VideoFormat.GetValue();
+	return true;
 }
 
 bool FIPStreamPlayer::SelectTrack(EMediaTrackType TrackType, int32 TrackIndex)
 {
-	return false;
+	if (TrackType != EMediaTrackType::Video || (TrackIndex != INDEX_NONE && !IsVideoTrack(TrackType, TrackIndex)))
+	{
+		return false;
+	}
+	SelectedVideoTrack = TrackIndex;
+	return true;
 }
 
 bool FIPStreamPlayer::SetTrackFormat(EMediaTrackType TrackType, int32 TrackIndex, int32 FormatIndex)
 {
-	return false;
+	return IsVideoTrack(TrackType, TrackIndex) && FormatIndex == 0 ;
 }
 
-
-
+bool FIPStreamPlayer::IsVideoTrack(EMediaTrackType TrackType, int32 TrackIndex) const
+{
+	return TrackType == EMediaTrackType::Video && TrackIndex == 0 && VideoFormat.IsSet();
+}

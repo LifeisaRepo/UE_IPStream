@@ -83,6 +83,8 @@ public:
 	// Valid only after DecodeNext() returned GotFrame, until the next call
 	bool ConvertFrameToBGRA(uint8* Dst, int32 DstStride);
 
+	// Name of the stream's codec, e.g. 'hevc'. Empty when closed.
+	FString GetCodecName() const;
 	
 	//~ Thread boundary - Following two functions are callable from any thread
 

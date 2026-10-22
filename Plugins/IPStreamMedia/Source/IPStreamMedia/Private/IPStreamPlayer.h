@@ -9,6 +9,7 @@
 #include "IMediaPlayer.h"
 #include "Templates/SharedPointer.h"
 #include "Templates/UniquePtr.h"
+#include "Misc/Optional.h"
 
 class FIPStreamDecodeWorker;
 class FMediaSamples;
@@ -83,6 +84,9 @@ protected:
 
 private:
 
+	// True only for our one video track (index 0), and only while a stream has reported its format
+	bool IsVideoTrack(EMediaTrackType TrackType, int32 TrackIndex) const;
+
 	// The facade's event sink, handed to us during at construction; we don't create nor own it - hence this is a reference.
 	IMediaEventSink& EventSink;
 
@@ -97,5 +101,11 @@ private:
 
 	// Decode thread
 	TUniquePtr<FIPStreamDecodeWorker> DecodeWorker;
+
+	// Format of the one video track. set = a track exists.
+	TOptional<FMediaVideoTrackFormat> VideoFormat;
+
+	// Video track selected by the facade: 0 or INDEX_NONE
+	int32 SelectedVideoTrack = INDEX_NONE;
 
 };

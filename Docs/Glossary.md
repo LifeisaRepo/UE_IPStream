@@ -648,6 +648,13 @@ instrumented events across threads.
 **`TRACE_CPUPROFILER_EVENT_SCOPE`** — the macro that marks a code region so it
 appears in Insights. *How the latency breakdown in M5 gets measured.*
 
+**`TOptional<T>`** — a box that holds either one `T` or nothing. `IsSet()` says
+which (`Misc/Optional.h:337`), `GetValue()` reads the value and is only valid when
+set (`:51-52`), `Reset()` empties the box (`:215`). Unreal's version of standard
+C++'s `std::optional`. Use it for "maybe a value" instead of a made-up "no value"
+number like `-1`, or a separate `bool` that can drift out of step with the value.
+*Used for the player's video track format (map #6): set = a track exists.*
+
 ---
 
 ## 8. Licensing
