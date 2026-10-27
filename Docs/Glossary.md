@@ -175,6 +175,12 @@ photons leaving the display. The honest end-to-end number, including camera
 encode, network, decode, render, and display — as opposed to measuring only your
 own code and quoting that.
 
+**Round-trip time (RTT)** — how long a message takes to go from one machine to another
+and for the reply to come back. A clock page that asks a server for the time uses it
+to correct for the reply's travel time, usually by assuming the reply took half the
+round trip. It can't know the split was even, so the corrected time can be off by up
+to about half the round trip. *Used in M5's latency method (map #7, the two clocks).*
+
 ---
 
 ## 4. FFmpeg

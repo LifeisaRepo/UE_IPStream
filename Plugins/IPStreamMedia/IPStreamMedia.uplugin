@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
 	"Version": 1,
-	"VersionName": "0.1-beta",
+	"VersionName": "0.1.2-beta",
 	"FriendlyName": "IPStreamMedia",
 	"Description": "Media Framework player backend for live IP video streams (RTSP, Phase 1).",
 	"Category": "Media Players",
