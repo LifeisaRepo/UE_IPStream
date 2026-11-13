@@ -952,3 +952,40 @@ invokes *during* blocking operations, which aborts the operation if it returns
 — our equivalent of `FEvent::Trigger()`.** The header promises it is called, but
 documents no interval; M1's measured 39 ms overshoot against a 6.0 s deadline is
 the only evidence of granularity we have.
+
+## 11. Memory and GPU diagnostics
+
+**Process** — one running program: one block of memory, the DLLs loaded into it, and its
+threads. A DLL loaded into a process shares that memory with everything else in it.
+
+**Heap** — the pool a program's `malloc` (or `new`) takes memory from and returns it to. FFmpeg's
+DLLs and Unreal's C runtime use the same one here (UCRT).
+
+**Private bytes / commit size** — memory reserved for this process alone. Task Manager's *Commit
+size*, LLM's *Total*. Unlike the working set, Windows can't hide it by trimming.
+
+**LLM (Low-Level Memory tracker)** — Unreal's memory accounting (`-LLMCSV` writes it to a CSV).
+*FMalloc* is what Unreal's own allocator handed out; *Untracked* is process memory LLM can't
+attribute, such as a driver's or FFmpeg's.
+
+**Heap trace** — a recording of every heap allocation and free, with the call chain that made each.
+Made with Windows Performance Recorder (`wpr -start Heap`) and read with `xperf -a heap` or
+Windows Performance Analyzer (WPA). *Outstanding* = allocated during the trace and not freed by its
+end.
+
+**`timeBeginPeriod(1)`** — asks Windows to wake waiting threads on a 1 ms tick instead of the
+default ~15.6 ms, for the whole process. Unreal calls it at start-up
+(`WindowsPlatformMisc.cpp:603`).
+
+**GPU marker / draw event** — a label Unreal attaches to a stretch of GPU work ("shadow pass")
+so profiling and crash tools can say which work was running. Sent per frame, many per frame.
+
+**PIX** — Microsoft's GPU profiler for Windows. Unreal sends it GPU markers through
+`WinPixEventRuntime.dll` whenever that DLL loads, which Development builds and the editor do;
+Shipping builds don't link it (`D3D12RHI.Build.cs:40-44`).
+
+**DRED (Device Removed Extended Data)** — Windows' D3D12 feature that records what the GPU was
+doing when it crashed. Unreal turns on a "lightweight" form by default, Shipping included.
+
+**NVIDIA Aftermath** — NVIDIA's GPU crash-dump library. On by default in Unreal's Development
+builds; off with `-nvaftermath=0`.

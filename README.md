@@ -6,11 +6,11 @@ Still a work in progress, but the core works now. You give a normal Media Player
 
 A first rough measurement puts it at about 250 ms from camera to screen on my setup. I'll write up the method once I've repeated it properly.
 
-Packaged demo and plugin, a bit behind the code: [v0.1-beta](https://github.com/LifeisaRepo/UE_IPStream/releases/tag/v0.1-beta)
+Packaged demo and plugin: [v0.1.2-beta](https://github.com/LifeisaRepo/UE_IPStream/releases/tag/v0.1.2-beta)
 
 Known issues:
-- Memory grows by a few MB a minute while a stream is open. It looks like it's in FFmpeg's packet reading, and I've parked it for now.
-- Tested with one camera so far (H.265, 720p, 25 fps).
+- In Development builds and the editor, on NVIDIA cards, memory grows by about 10 MB a minute, stream or no stream. It turned out not to be the plugin: the graphics driver holds on to Unreal's PIX profiling markers while D3D12's lightweight DRED is on. Shipping builds are fine, and in a Development build `-dpcvars=r.D3D12.LightweightDRED=0` avoids it.
+- Tested with one camera (H.265, 720p, 25 fps) and OBS (H.264, 720p, 25 fps) so far.
 
 I'm writing about the whole process as I go. Start here: [IPStreamMedia #1](https://sanjyotdahale.dev/devlogs/2026/08/23/ipstream_1.html)
 
