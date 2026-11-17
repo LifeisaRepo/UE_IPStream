@@ -6,7 +6,7 @@ Still a work in progress, but the core works now. You give a normal Media Player
 
 On my setup it's about 250 ms from camera to screen. Profiling with Unreal Insights (OBS stream, no B-frames) shows the plugin itself takes about 10 ms from packet to GPU upload, and only about 1 ms of that is actual work. Method and numbers: [Docs/Latency.md](Docs/Latency.md)
 
-Packaged demo and plugin: [v0.1.2-beta](https://github.com/LifeisaRepo/UE_IPStream/releases/tag/v0.1.2-beta)
+Packaged demo and plugin: [v0.1.3-beta](https://github.com/LifeisaRepo/UE_IPStream/releases/tag/v0.1.3-beta)
 
 Known issues:
 - In Development builds and the editor, on NVIDIA cards, memory grows by about 10 MB a minute, stream or no stream. It turned out not to be the plugin: the graphics driver holds on to Unreal's PIX profiling markers while D3D12's lightweight DRED is on. Shipping builds are fine, and in a Development build `-dpcvars=r.D3D12.LightweightDRED=0` avoids it.
