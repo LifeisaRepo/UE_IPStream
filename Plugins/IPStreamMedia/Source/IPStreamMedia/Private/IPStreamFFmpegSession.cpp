@@ -5,6 +5,7 @@
 
 #include "IIPStreamMediaModule.h"
 #include "HAL/PlatformTime.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 // FFmpeg includes. `extern C` is needed as FFmpeg is written in C
 // C++ compilers mangle function names in C code without this
@@ -178,6 +179,10 @@ bool FIPStreamFFmpegSession::Open(const FString& Url)
 		? FTimespan(static_cast<int64>(FrameRate.den) * ETimespan::TicksPerSecond / FrameRate.num) 
 		: FTimespan::Zero();
 
+	// Ensures that the opaque inside a packet is copied into the corresponding frame after decoding
+	// Opaque holds our profiling timestamp
+	CodecContext->flags |= AV_CODEC_FLAG_COPY_OPAQUE;
+
 	// Setup the decoder in memory
 	if (avcodec_open2(CodecContext, Decoder, nullptr) < 0)
 	{
@@ -212,7 +217,11 @@ EIPStreamDecodeResult FIPStreamFFmpegSession::DecodeNext()
 	}
 
 	// Does the decoder have a frame for us ?
-	const int ReceiveResult = avcodec_receive_frame(CodecContext, Frame);
+	int ReceiveResult = 0;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(IPStream_Receive);
+		ReceiveResult = avcodec_receive_frame(CodecContext, Frame);
+	}
 
 	if (ReceiveResult == 0)
 	{
@@ -226,7 +235,7 @@ EIPStreamDecodeResult FIPStreamFFmpegSession::DecodeNext()
 	}
 	if (ReceiveResult != AVERROR(EAGAIN))
 	{
-		UE_LOG(LogIPStreamMedia, Error, TEXT("DecodeNext: avcodec_receive_frame() has failed. ReturnCode = %d. -_-"), ReceiveResult);
+		UE_LOG(LogIPStreamMedia, Error, TEXT("DecodeNext: avcodec_receive_frame() has failed. ReturnCode = %d."), ReceiveResult);
 		return EIPStreamDecodeResult::Error;
 	}
 	
@@ -234,7 +243,11 @@ EIPStreamDecodeResult FIPStreamFFmpegSession::DecodeNext()
 	
 	// Set deadline for interrupt callback
 	SetDeadline(ReadTimeoutSeconds);
-	const int ReadResult = av_read_frame(FormatContext, Packet);
+	int ReadResult = 0;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(IPStream_Read);
+		ReadResult = av_read_frame(FormatContext, Packet);
+	}
 	
 	// Program exited out of av_read_frame() for some reason
 	if (ReadResult == AVERROR_EXIT)
@@ -259,9 +272,21 @@ EIPStreamDecodeResult FIPStreamFFmpegSession::DecodeNext()
 		av_packet_unref(Packet);
 		return EIPStreamDecodeResult::NoFrameYet;
 	}
+
+	// Set the timestamp inside the Packet
+	// 
+	// NOTE = This will only work on 64-bit platforms because we need 64-bit pointers, 
+	// In 32-bit platforms the pointer is 32-bit so it will drop half the tick value.
+	// 
+	// uintptr_t = a number as big as the width of a pointer //
+	Packet->opaque = reinterpret_cast<void*>(static_cast<uintptr_t>(FPlatformTime::Cycles64()));
 	
 	// Send the new packet to decoder
-	const int SendResult = avcodec_send_packet(CodecContext, Packet);
+	int SendResult = 0;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(IPStream_Send);
+		SendResult = avcodec_send_packet(CodecContext, Packet);
+	}
 	
 	// Wipe packet immediately for re-use
 	av_packet_unref(Packet);
@@ -320,6 +345,20 @@ bool FIPStreamFFmpegSession::IsOpen() const
 FString FIPStreamFFmpegSession::GetCodecName() const
 {
 	return CodecContext ? FString(UTF8_TO_TCHAR(avcodec_get_name(CodecContext->codec_id))) : FString();
+}
+
+FString FIPStreamFFmpegSession::GetDecoderDelayInfo()
+{
+	if (!CodecContext)
+	{
+		return FString();
+	}
+
+	// has_b_frames: size of the decoder's reorder buffer in frames.
+	// active_thread_type: 1 = frame threading, which also holds frames back;
+	// 2 = slice threading, which doesn't; 0 = no threading
+	return FString::Printf(TEXT("has_b_frames = %d, thread_count = %d, active_thread_type = %d"),
+		CodecContext->has_b_frames, CodecContext->thread_count, CodecContext->active_thread_type);
 }
 
 bool FIPStreamFFmpegSession::GetFrameInfo(FIPStreamFrameInfo& OutInfo)
@@ -392,6 +431,9 @@ bool FIPStreamFFmpegSession::GetFrameInfo(FIPStreamFrameInfo& OutInfo)
 	OutInfo.Dim = FIntPoint(Frame->width, Frame->height);
 	OutInfo.Time = Time;
 	OutInfo.Duration = Duration;
+
+	// Get timestamp out from the Frame
+	OutInfo.PacketCycles = static_cast<uint64>(reinterpret_cast<uintptr_t>(Frame->opaque));
 
 	return true;
 }

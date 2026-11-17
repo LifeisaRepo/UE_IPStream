@@ -5,6 +5,12 @@
 #include "IIPStreamMediaModule.h"
 #include "HAL/RunnableThread.h"
 #include "HAL/PlatformTime.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
+#include "ProfilingDebugging/CountersTrace.h"
+
+// Float counters are not atomic hence set on worker thread only
+TRACE_DECLARE_FLOAT_COUNTER(IPStream_DecoderDelayMs, TEXT("IPStream/DecoderDelayMs"));
+TRACE_DECLARE_FLOAT_COUNTER(IPStream_ConvertMs, TEXT("IPStream/ConvertMs"));
 
 namespace
 {
@@ -151,11 +157,11 @@ void FIPStreamDecodeWorker::DecodeStream()
 				PendingEvents.Enqueue({ EMediaEvent::TracksChanged, MakeVideoFormat(Info, Session.GetCodecName()) });
 				PendingEvents.Enqueue({ bEverGotFrame ? EMediaEvent::PlaybackResumed : EMediaEvent::MediaOpened, {} });
 
-				UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeStream(): First frame on connection %d, %.3f ms after connecting began (%llu frames decoded so far). ^_^"), ConnectionIndex, (FPlatformTime::Seconds() - ConnectStartSeconds) * 1000.0, FramesDecoded);
+				UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeStream(): First frame on connection %d, %.3f ms after connecting began (%llu frames decoded so far). Decoder: %s"), ConnectionIndex, (FPlatformTime::Seconds() - ConnectStartSeconds) * 1000.0, FramesDecoded, *Session.GetDecoderDelayInfo());
 			}
 			else if (FramesDecoded % FramesPerProgressLog == 0)
 			{
-				UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeStream(): %llu frames decoded so far. ^_^"), FramesDecoded);
+				UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeStream(): %llu frames decoded so far. Decoder: %s"), FramesDecoded, *Session.GetDecoderDelayInfo());
 			}
 			continue;
 		}
@@ -198,6 +204,11 @@ void FIPStreamDecodeWorker::WaitBeforeReconnect()
 
 bool FIPStreamDecodeWorker::HandOffFrame(FIPStreamFrameInfo& OutInfo)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(IPStream_HandOff);
+
+	// New decoded frame is just ready
+	const uint64 PictureOutCycles = FPlatformTime::Cycles64();
+
 	// Frame's metadata
 	if (!Session.GetFrameInfo(OutInfo))
 	{
@@ -224,6 +235,16 @@ bool FIPStreamDecodeWorker::HandOffFrame(FIPStreamFrameInfo& OutInfo)
 	{
 		SkipFrame(TEXT("ConvertFrameToBGRA"));
 		return false;
+	}
+
+	// Frame about to be sent into queue
+	const uint64 QueuedCycles = FPlatformTime::Cycles64();
+	Sample->SetStamps(OutInfo.PacketCycles, QueuedCycles);
+
+	TRACE_COUNTER_SET(IPStream_ConvertMs, FPlatformTime::ToMilliseconds64(QueuedCycles - PictureOutCycles));
+	if (OutInfo.PacketCycles != 0)
+	{
+		TRACE_COUNTER_SET(IPStream_DecoderDelayMs, FPlatformTime::ToMilliseconds64(PictureOutCycles - OutInfo.PacketCycles));
 	}
 
 	// Hand-off

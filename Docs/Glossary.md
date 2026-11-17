@@ -989,3 +989,33 @@ doing when it crashed. Unreal turns on a "lightweight" form by default, Shipping
 
 **NVIDIA Aftermath** — NVIDIA's GPU crash-dump library. On by default in Unreal's Development
 builds; off with `-nvaftermath=0`.
+
+## 12. Profiling and C++ casts
+
+**Unreal Insights** — Unreal's profiler. The game writes a *trace* file (`.utrace`) while running;
+Insights opens it and draws each thread's timeline.
+
+**Trace channel** — one kind of trace data, switched on from the command line: `-trace=default,counters`.
+`default` = `cpu,gpu,frame,log,bookmark,screenshot,region` (`TraceAuxiliary.cpp:62`).
+
+**Trace scope** — `TRACE_CPUPROFILER_EVENT_SCOPE(Name)`: a hidden local object that writes "Name started"
+when created and "Name ended" at the closing `}`. Insights draws it as a bar. Waiting inside the braces
+counts as part of the bar.
+
+**Trace counter** — `TRACE_DECLARE_FLOAT_COUNTER` / `TRACE_COUNTER_SET`: a named number recorded over
+time, drawn as a graph. Needs the `counters` channel.
+
+**QueryPerformanceCounter (QPC)** — Windows' high-resolution clock: a whole number that goes up at a
+fixed rate (`QueryPerformanceFrequency` gives the rate). `FPlatformTime::Cycles64()` returns it raw as
+a `uint64`; `FPlatformTime::Seconds()` is the same reading converted to seconds as a `double`
+(`WindowsPlatformTime.h:23-44`).
+
+**`static_cast`** — a conversion the compiler knows how to do between related types, changing the
+value's form if needed: `double` to `int`, `uint64` to `uintptr_t`. Refuses unrelated types (a number
+to a pointer).
+
+**`reinterpret_cast`** — "keep the same bits, read them as another type". Used here for a number to a
+pointer and back. The compiler checks almost nothing, so it's used only where that is the intent.
+
+**`uintptr_t`** — a whole-number type exactly as wide as a pointer (8 bytes on Win64). The standard
+go-between when a number has to be stored in a pointer field.

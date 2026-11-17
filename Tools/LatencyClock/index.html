@@ -1,0 +1,66 @@
+<!doctype html>
+<!--
+  Latency clock for glass-to-glass runs on one PC.
+
+  OBS captures this window and streams it; the game shows the stream beside this window.
+  One screenshot then holds both clocks: real (this window) and streamed (in the game).
+  Latency = real time - streamed time.
+
+  Open the file in a browser. Time is the PC clock (Date.now), redrawn on every screen refresh.
+  Big digits = the part that changes between screenshots, so it stays readable after encoding.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Latency Clock</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #000;
+    color: #fff;
+    font-family: Consolas, "Courier New", monospace;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2vh;
+  }
+  #hms { font-size: 8vw; color: #bbb; }
+  #ms  { font-size: 22vw; font-weight: bold; line-height: 1; }
+  #fps { font-size: 2vw; color: #666; }
+</style>
+</head>
+<body>
+  <div id="hms">--:--:--</div>
+  <div id="ms">---</div>
+  <div id="fps"></div>
+<script>
+  const hms = document.getElementById("hms");
+  const ms = document.getElementById("ms");
+  const fps = document.getElementById("fps");
+  const pad = (n, w) => String(n).padStart(w, "0");
+
+  let frames = 0;
+  let lastFpsTime = performance.now();
+
+  function draw(now) {
+    const t = new Date();
+    hms.textContent = pad(t.getHours(), 2) + ":" + pad(t.getMinutes(), 2) + ":" + pad(t.getSeconds(), 2);
+    ms.textContent = pad(t.getMilliseconds(), 3);
+
+    // Refresh rate shown so the screenshot records it (the clock can't change faster than this)
+    frames++;
+    if (now - lastFpsTime >= 1000) {
+      fps.textContent = Math.round(frames * 1000 / (now - lastFpsTime)) + " Hz redraw";
+      frames = 0;
+      lastFpsTime = now;
+    }
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+</script>
+</body>
+</html>

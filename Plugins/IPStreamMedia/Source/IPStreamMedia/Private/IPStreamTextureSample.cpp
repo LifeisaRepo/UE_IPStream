@@ -3,9 +3,19 @@
 
 #include "IPStreamTextureSample.h"
 #include "IIPStreamMediaModule.h"
+#include "HAL/PlatformTime.h"
+#include "ProfilingDebugging/CountersTrace.h"
+
+// Float counters are not atomic hence only set on render thread
+TRACE_DECLARE_FLOAT_COUNTER(IPStream_QueueWaitMs, TEXT("IPStream/QueueWaitMs"));
+TRACE_DECLARE_FLOAT_COUNTER(IPStream_OursMs, TEXT("IPStream/OursMs"));
 
 bool FIPStreamTextureSample::Initialize(FIntPoint InDim, FMediaTimeStamp InTime, FTimespan InDuration)
 {
+	PacketCycles = 0;
+	QueuedCycles = 0;
+	bUploadStamped = false;
+
 	if (InDim.X <= 0 || InDim.Y <= 0 || InDuration <= FTimespan::Zero())
 	{
 		UE_LOG(LogIPStreamMedia, Verbose, TEXT("FIPStreamTextureSample::Initialize - Failed to intialize sample. Either Dim <= 0 or Duration <= 0. "));
@@ -25,8 +35,28 @@ uint8* FIPStreamTextureSample::GetMutableBuffer()
 	return Buffer.GetData();
 }
 
+void FIPStreamTextureSample::SetStamps(uint64 InPacketCycles, uint64 InQueuedCycles)
+{
+	PacketCycles = InPacketCycles;
+	QueuedCycles = InQueuedCycles;
+}
+
 const void* FIPStreamTextureSample::GetBuffer()
 {
+	if (!bUploadStamped)
+	{
+		bUploadStamped = true;
+		const uint64 UploadCycles = FPlatformTime::Cycles64();
+
+		if (QueuedCycles != 0)
+		{
+			TRACE_COUNTER_SET(IPStream_QueueWaitMs, FPlatformTime::ToMilliseconds64(UploadCycles - QueuedCycles));
+		}
+		if (PacketCycles != 0)
+		{
+			TRACE_COUNTER_SET(IPStream_OursMs, FPlatformTime::ToMilliseconds64(UploadCycles - PacketCycles));
+		}
+	}
 	return Buffer.GetData();
 }
 

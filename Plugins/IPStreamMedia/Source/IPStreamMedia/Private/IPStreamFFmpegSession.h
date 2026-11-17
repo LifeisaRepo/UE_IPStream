@@ -45,6 +45,9 @@ struct FIPStreamFrameInfo
 	FIntPoint Dim = FIntPoint(0, 0);
 	FTimespan Time = FTimespan::Zero();
 	FTimespan Duration = FTimespan::Zero();
+	
+	// Used for profiling
+	uint64 PacketCycles = 0;
 };
 
 /**
@@ -85,6 +88,9 @@ public:
 
 	// Name of the stream's codec, e.g. 'hevc'. Empty when closed.
 	FString GetCodecName() const;
+
+	// Profiling
+	FString GetDecoderDelayInfo();
 	
 	//~ Thread boundary - Following two functions are callable from any thread
 

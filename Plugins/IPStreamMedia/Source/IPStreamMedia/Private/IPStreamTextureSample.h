@@ -19,6 +19,9 @@ public:
 	// Where the worker writes the converted pixels. Valid between Initialize() and AddVideo() only.
 	uint8* GetMutableBuffer();
 
+	// Latency stamps, FPlatformTime::Cycles64(). 0 = unknown.
+	void SetStamps(uint64 InPacketCycles, uint64 InQueuedCycles);
+
 	//~ IMediaTextureSample interface
 	virtual const void* GetBuffer() override;
 	virtual FIntPoint GetDim() const override;
@@ -40,6 +43,14 @@ private:
 	FIntPoint Dim = FIntPoint(0, 0);
 	FMediaTimeStamp Time;
 	FTimespan Duration = FTimespan::Zero();
+
+	// Packet delivered timestamp
+	uint64 PacketCycles = 0;
+	// Sample queued timestamp
+	uint64 QueuedCycles = 0;
+
+	// Render() calls GetBuffer() twice, this avoids multiple profile stamps.
+	bool bUploadStamped = false;
 };
 
 class FIPStreamTextureSamplePool : public TMediaObjectPool<FIPStreamTextureSample>

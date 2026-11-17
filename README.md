@@ -4,7 +4,7 @@ An Unreal Engine 5.3 plugin for playing live RTSP camera streams through Unreal'
 
 Still a work in progress, but the core works now. You give a normal Media Player an `rtsp://` URL with IPStreamMedia as its player, and the live video plays on a Media Texture like any other media. Decoding runs on its own thread, it tries to reconnect if the stream drops, and the usual Media Player events fire (opened, failed, suspended, resumed, closed). Blueprint can also read the video's size, frame rate and codec.
 
-A first rough measurement puts it at about 250 ms from camera to screen on my setup. I'll write up the method once I've repeated it properly.
+On my setup it's about 250 ms from camera to screen. Profiling with Unreal Insights (OBS stream, no B-frames) shows the plugin itself takes about 10 ms from packet to GPU upload, and only about 1 ms of that is actual work. Method and numbers: [Docs/Latency.md](Docs/Latency.md)
 
 Packaged demo and plugin: [v0.1.2-beta](https://github.com/LifeisaRepo/UE_IPStream/releases/tag/v0.1.2-beta)
 
