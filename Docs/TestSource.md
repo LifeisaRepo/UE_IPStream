@@ -27,7 +27,7 @@ Stream #0:1: Audio: pcm_alaw, 8000 Hz, mono, s16, 64 kb/s
 | Resolution | 1920×1080 |
 | Frame rate | 25 fps |
 | Pixel format | `yuv420p`, **limited range** (`tv`, 16–235) |
-| Audio codec | PCM A-law, 8 kHz mono — out of scope, confirmed present |
+| Audio codec | PCM A-law, 8 kHz mono, confirmed present on this (primary) stream. In scope since 2026-11-17 (`Architecture.md` D17) |
 
 ---
 
@@ -149,6 +149,9 @@ that happens not to be the stream this project ends up using.
 ```
 Stream #0:0: Video: hevc, yuv420p, 1280x720, 25 fps
 ```
+
+No audio stream was listed in this capture. Not yet re-checked (2026-11-17); the
+audio unit (`Architecture.md` D17) will confirm it.
 
 | Property | Value |
 |---|---|

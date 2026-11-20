@@ -8,22 +8,36 @@
 #include "HAL/Runnable.h"
 #include "IMediaEventSink.h"
 #include "IMediaTracks.h"
+#include "Misc/Optional.h"
 
 #include "IPStreamFFmpegSession.h"
 #include "IPStreamTextureSample.h"
+#include "IPStreamAudioSample.h"
 
 class FRunnableThread;
 
 using FIPStreamSampleReadyFn = TFunction<void(const TSharedRef<IMediaTextureSample, ESPMode::ThreadSafe>&)>;
 
+// Returns true if the sample was queued, false if sample had no room
+using FIPStreamAudioReadyFn = TFunction<bool(const TSharedRef<IMediaAudioSample, ESPMode::ThreadSafe>&)>;
+
+/**
+ * @brief The connection's whole track list. Unset = the stream has no such track
+ */
+struct FIPStreamTrackList
+{
+	TOptional<FMediaVideoTrackFormat> Video;
+	TOptional<FMediaAudioTrackFormat> Audio;
+};
+
 /**
  * @brief Single data block which can carry event updates from the worker to the player.
- * Format is filled only for TracksChanged event, other events carry empty format
+ * Tracks is filled only for TracksChanged event, other events carry empty format
  */
 struct FIPStreamWorkerEvent
 {
 	EMediaEvent Event;
-	FMediaVideoTrackFormat Format;
+	FIPStreamTrackList Tracks;
 };
 
 /**
@@ -40,7 +54,7 @@ public:
 
 	// InMaxReconnectAttempts: 0 = retry forever, N = try N times before giving up
 	// InOnSampleReady: receives every finished sample, on the worker thread.
-	FIPStreamDecodeWorker(const FString& InUrl, int32 InMaxReconnectAttempts, const FIPStreamSampleReadyFn& InOnSampleReady);
+	FIPStreamDecodeWorker(const FString& InUrl, int32 InMaxReconnectAttempts, const FIPStreamSampleReadyFn& InOnSampleReady, const FIPStreamAudioReadyFn& InOnAudioReady);
 	virtual ~FIPStreamDecodeWorker();
 
 	// Object of this type cannot be copied or moved.
@@ -90,6 +104,18 @@ private:
 	 */
 	void SkipFrame(const TCHAR* Reason);
 
+	/**
+	 * @brief Turns the audio frame DecodeNext() produced into a sample and hands it over
+	 * @param OutInfo The audio frame's info; valid when this returns true
+	 * @return false if no sample could be built
+	 */
+	bool HandOffAudio(FIPStreamAudioInfo& OutInfo);
+
+	/**
+	 * @brief Counts a block of sound that did not reach the queue. Logs the first and every 100th.
+	 * @brief Reasons: bad info, sample setup, conversion failure, or the queue was full.
+	 */
+	void DropAudio(const TCHAR* Reason);
 	
 
 	/* ~Constructor-only setters.
@@ -98,12 +124,14 @@ private:
 	const FString Url;						// Url of the stream
 	const int32 MaxReconnectAttempts;		// Max times the player should try to reconnect to the stream before giving up. 0 = retry forever.
 	const FIPStreamSampleReadyFn OnSampleReady;
+	const FIPStreamAudioReadyFn OnAudioReady;
 
 	/* ~Other members
 	**************************************/	
 
 	FIPStreamFFmpegSession Session;
 	FIPStreamTextureSamplePool SamplePool;
+	FIPStreamAudioSamplePool AudioSamplePool;
 	FEventRef BackoffEvent{ EEventMode::AutoReset };	// Auto-reset is default. Written explicitly for readbility
 	FRunnableThread* Thread = nullptr;
 
@@ -121,5 +149,8 @@ private:
 	bool bEverGotFrame = false;				// true once any connection has delivered a frame.
 	int32 ConnectionIndex = -1;				// Connection lap number.
 	uint64 FramesSkipped = 0;				// @see SkipFrame() for why a frame might be skipped.
+
+	FIPStreamTrackList Tracks;				// This connection's tracks so far
+	uint64 AudioBlocksDropped = 0;			// @see DropAudio() for why a audio block might be dropped.
 
 };

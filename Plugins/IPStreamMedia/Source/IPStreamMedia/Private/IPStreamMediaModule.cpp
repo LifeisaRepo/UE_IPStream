@@ -11,7 +11,7 @@ DEFINE_LOG_CATEGORY(LogIPStreamMedia);
 
 namespace
 {
-	// Must match FFmpeg.Build.cs's Libraries array - same four DLLs, same filenames.
+	// Must match FFmpeg.Build.cs's Libraries array - same five DLLs, same filenames.
 	// Order of the DLLs is not important, avutil has been written first just for readability.
 	// Windows' loader will automatically resolve avutil dependencies within other dlls even if they are loaded in a different order.
 
@@ -21,6 +21,7 @@ namespace
 		TEXT("avcodec-63.dll"),
 		TEXT("avformat-63.dll"),
 		TEXT("swscale-10.dll"),
+		TEXT("swresample-7.dll")
 	};
 }
 

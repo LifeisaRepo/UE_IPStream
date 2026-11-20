@@ -84,8 +84,8 @@ protected:
 
 private:
 
-	// True only for our one video track (index 0), and only while a stream has reported its format
-	bool IsVideoTrack(EMediaTrackType TrackType, int32 TrackIndex) const;
+	// True only for our one track of that type (index 0), and only while a stream has reported its format
+	bool HasTrack(EMediaTrackType TrackType, int32 TrackIndex) const;
 
 	// The facade's event sink, handed to us during at construction; we don't create nor own it - hence this is a reference.
 	IMediaEventSink& EventSink;
@@ -105,7 +105,13 @@ private:
 	// Format of the one video track. set = a track exists.
 	TOptional<FMediaVideoTrackFormat> VideoFormat;
 
+	// Format of the one audio track. set = a track exists.
+	TOptional<FMediaAudioTrackFormat> AudioFormat;
+
 	// Video track selected by the facade: 0 or INDEX_NONE
 	int32 SelectedVideoTrack = INDEX_NONE;
+
+	// Audio track selected by the facade: 0 or INDEX_NONE.
+	int32 SelectedAudioTrack = INDEX_NONE;
 
 };

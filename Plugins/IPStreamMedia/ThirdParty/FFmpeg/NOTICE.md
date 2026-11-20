@@ -1,9 +1,10 @@
 # FFmpeg — Third-Party Notice
 
 This plugin dynamically links against FFmpeg's shared libraries
-(`avutil`, `avcodec`, `avformat`, `swscale`). Packaged builds also ship
-`swresample`: the plugin never calls it, but `avcodec-63.dll` itself imports
-`swresample-7.dll`, so `avcodec` cannot load without it. **FFmpeg itself is not
+(`avutil`, `avcodec`, `avformat`, `swscale`, `swresample`). `swresample`
+converts decoded audio into the layout Unreal takes (since 2026-11-18); it was
+staged before that too, because `avcodec-63.dll` itself imports
+`swresample-7.dll`. **FFmpeg itself is not
 modified** — every `.dll` in `bin/Win64/` is byte-for-byte the unmodified
 build described below.
 
@@ -72,7 +73,7 @@ that compiled and linked perfectly and then failed at editor startup with
 `Missing import: avutil-61.dll`. Full diagnosis: `M1DelayLoadRCA.md`
 (the author's study notes, not published in this repository).
 
-The four import libraries this plugin links were therefore regenerated from
+The five import libraries this plugin links were therefore regenerated from
 the `.def` files shipped in `lib/Win64/`, using MSVC's `lib.exe` (run from a
 Developer Command Prompt, in `lib/Win64/`):
 
@@ -81,6 +82,7 @@ lib /DEF:avutil-61.def   /OUT:avutil.lib   /MACHINE:X64 /NAME:avutil-61.dll
 lib /DEF:avcodec-63.def  /OUT:avcodec.lib  /MACHINE:X64 /NAME:avcodec-63.dll
 lib /DEF:avformat-63.def /OUT:avformat.lib /MACHINE:X64 /NAME:avformat-63.dll
 lib /DEF:swscale-10.def  /OUT:swscale.lib  /MACHINE:X64 /NAME:swscale-10.dll
+lib /DEF:swresample-7.def /OUT:swresample.lib /MACHINE:X64 /NAME:swresample-7.dll
 del *.exp
 ```
 
@@ -89,12 +91,16 @@ del *.exp
 the DLL name from the `/OUT:` filename and records `avutil.dll` — a DLL that
 does not exist in this build.
 
-Verify with `dumpbin /DEPENDENTS` on the built module binary: the four FFmpeg
+Verify with `dumpbin /DEPENDENTS` on the built module binary: the five FFmpeg
 DLLs should appear under *"Image has the following delay load dependencies"*,
 not under plain dependencies.
 
-Only the four libraries this plugin actually links were regenerated;
-`avdevice`, `avfilter`, and `swresample` are left exactly as shipped.
+Only the five libraries this plugin actually links were regenerated;
+`avdevice` and `avfilter` are left exactly as shipped. (`swresample.lib` was
+regenerated on 2026-11-18, when the plugin started calling it. Quick check on
+an import library before building: `dumpbin /HEADERS <name>.lib | find /c "DLL name"`
+gives 0 for the shipped GNU format and one per export for the regenerated one;
+23 for `swresample`.)
 
 ## Not yet audited: other third-party libraries statically built into these DLLs
 

@@ -41,9 +41,11 @@ documented end-to-end latency measurement and a reproducible measurement method.
 These are pre-refused. They are listed here so the decision is already made and
 does not have to be re-made at 11pm on a Saturday.
 
-- **Audio.** The test camera carries PCM A-law. Phase 1 reports no audio track.
-  Media Framework's audio sample interfaces are right there and are the single
-  most likely thing to consume a weekend for zero portfolio value.
+- ~~**Audio.**~~ **Moved out of this list on 2026-11-17 (D17).** v0.1 shipped
+  video only; audio is now its own unit of work after it. The original reason
+  stays here because it is still the risk to manage: *Media Framework's audio
+  sample interfaces are right there and are the single most likely thing to
+  consume a weekend for zero portfolio value.*
 - **Multiple simultaneous streams.**
 - **Hardware decode.** Phase 2. Software HEVC at 1080p25 costs roughly 10–15% of
   one modern core, which is not a Phase 1 problem.
@@ -54,6 +56,10 @@ does not have to be re-made at 11pm on a Saturday.
   Generalisation happens after it ships. "It should probably handle cameras that
   do X" is how a six-week project becomes a six-month one, and no reviewer will
   ever test it against hardware they do not own.
+  **Amended 2026-11-17:** where handling the general case costs under about two
+  hours more than handling ours, do the general case (first instance: any audio
+  layout FFmpeg decodes, through `swresample`). Above that, it is a decision made
+  on the record, not a default.
 
 ---
 
@@ -68,7 +74,7 @@ The camera exposes two RTSP streams. **Phase 1 targets the secondary stream.**
 | Resolution | 1280×720 | 1920×1080 |
 | Frame rate | 25 fps | 25 fps |
 | GOP | **50 frames / 2.0s, measured, admin-editable** | ~8.0–8.1s, measured, **not editable while InstaStream is active** |
-| Audio codec | PCM A-law (ignored — see non-goals) | PCM A-law (ignored) |
+| Audio codec | none listed in M0's capture (to be re-checked, D17) | PCM A-law, 8 kHz mono |
 
 ### Why the secondary stream, not the primary
 
@@ -789,6 +795,8 @@ Settled. Reopen only on new technical evidence.
 | D13 | D9's latest-frame-wins built on `IMediaPlayer`'s V2 timing model, not V1 | §7 — `FMediaSamples` already implements V2 sample selection; `SequenceIndex` fits D10 reconnects natively; Electra's own precedent |
 | D14 | `FIPStreamPlayer` **owns** a `TUniquePtr<FMediaSamples>`; implements the other four sub-interfaces directly | RTSP frames arrive sequentially, and FIFO is the right structure for sequentially-arriving data. Nothing in the engine inherits `FMediaSamples` — it is a component, not a base class. Reopens only if a Phase 2 D9 policy can't be expressed as queue configuration. `M2DesignDerivation.md` Q1 |
 | D15 | The decode loop runs on an owned `FRunnable` worker; `Close()` **joins** it, and M1's interrupt callback gains a stop flag so the join is bounded | A hard join (ImgMedia's pattern) is only unsafe while the worker is unreachable inside `av_read_frame`; the interrupt callback is the one wire that reaches it, and M1 measured its granularity at 39 ms. Electra's detached async teardown lost as **disproportionate** — it buys freedom from a millisecond-scale wait and charges nondeterministic teardown, a possible second RTSP session against a shared camera, and a crash risk unique to us (we `FreeDllHandle` FFmpeg by hand). Reopens if the join measures >~100 ms, if teardown stops being boundable (M3/hardware decode), on multi-stream, or if any blocking path ignores the callback. **Measured 2026-09-22 (item 5): 1.5 ms when the worker waits in our own code, 37 ms median while streaming, 65 ms median while connecting, worst case 92.8 ms. Bounded, not open-ended: FFmpeg checks the interrupt callback every `POLLING_TIME 100` ms (`libavformat/network.h:249`). D15 stands; its original "single-digit milliseconds" expectation was wrong and is replaced by these numbers.** `M2DesignDerivation.md` Q4, Q7 |
+| D17 | Audio is in scope, as its own unit after v0.1 (decided 2026-11-17) | v0.1 proved the video path; a stream player without sound is half a player. It reopens D9/D13: latest-frame-wins against keeping sound and picture in sync. That policy is being derived and will be recorded here. Phase 1's other non-goals (§2) still stand |
+| D18 | With audio playing, the sound's clock picks the video frame (`AlwaysPullNewestVideoFrame` off while an audio track is selected); with no audio, latest-frame-wins as before (decided 2026-11-18) | Amends D9 for the audio case; D13's V2 timing stands, and is what makes it possible. Lip sync costs latency: the picture waits as long as the sound's own path, and it freezes if sound stops while video continues (known issue). Lost: newest-frame always (never in sync); a per-source choice (planned later, the flag is read on every call); an automatic fallback when sound stops (more than its value for now). Reopens if the two streams' times turn out not to mean the same moment |
 
 ---
 

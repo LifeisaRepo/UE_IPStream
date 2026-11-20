@@ -31,6 +31,10 @@ namespace
 	// @see SkipFrame()
 	constexpr uint64 SkippedFramesPerLog = 100;
 
+	// Will log the first and every Nth skipped audio block
+	// @see DropAudio()
+	constexpr uint64 AudioBlocksPerLog = 100;
+
 	// Helper to create Track format for blueprints.
 	FMediaVideoTrackFormat MakeVideoFormat(const FIPStreamFrameInfo& Info, const FString& CodecName)
 	{
@@ -41,16 +45,28 @@ namespace
 		Format.TypeName = CodecName;
 		return Format;
 	}
-		
+
+	// Helper to create the audio track format for blueprints.
+	// BitsPerSample = 32: what our samples carry (float). A compressed source like AAC has no bits per sample of its own.
+	FMediaAudioTrackFormat MakeAudioFormat(const FIPStreamAudioInfo& Info, const FString& CodecName)
+	{
+		FMediaAudioTrackFormat Format;
+		Format.BitsPerSample = 32;
+		Format.NumChannels = static_cast<uint32>(Info.Channels);
+		Format.SampleRate = static_cast<uint32>(Info.SampleRate);
+		Format.TypeName = CodecName;
+		return Format;
+	}		
 }
 
 /* Ctor & Dtor
 **************************************/
 
-FIPStreamDecodeWorker::FIPStreamDecodeWorker(const FString& InUrl, int32 InMaxReconnectAttempts, const FIPStreamSampleReadyFn& InOnSampleReady)
+FIPStreamDecodeWorker::FIPStreamDecodeWorker(const FString& InUrl, int32 InMaxReconnectAttempts, const FIPStreamSampleReadyFn& InOnSampleReady, const FIPStreamAudioReadyFn& InOnAudioReady)
 	: Url(InUrl),
 	MaxReconnectAttempts(InMaxReconnectAttempts),
-	OnSampleReady(InOnSampleReady)
+	OnSampleReady(InOnSampleReady),
+	OnAudioReady(InOnAudioReady)
 {
 	// The thread starts here, and Run() might begin even before this constructor returns.
 	// So every member Run() uses must be built by this point.
@@ -58,7 +74,7 @@ FIPStreamDecodeWorker::FIPStreamDecodeWorker(const FString& InUrl, int32 InMaxRe
 
 	if (!Thread)
 	{
-		UE_LOG(LogIPStreamMedia, Error, TEXT("FIPStreamDecoder: Failed to create Decode thread. -_-"));
+		UE_LOG(LogIPStreamMedia, Error, TEXT("FIPStreamDecoder: Failed to create Decode thread."));
 	}
 }
 
@@ -105,7 +121,7 @@ uint32 FIPStreamDecodeWorker::Run()
 
 		if (bGiveUp)
 		{
-			UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: Run(): Gave up after %d failed attempts in a row. -_-"), ConsecutiveFailures);
+			UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: Run(): Gave up after %d failed attempts in a row."), ConsecutiveFailures);
 			PendingEvents.Enqueue({ bEverGotFrame ? EMediaEvent::PlaybackEndReached : EMediaEvent::MediaOpenFailed, {} });
 			break;
 		}
@@ -125,6 +141,7 @@ void FIPStreamDecodeWorker::Stop()
 void FIPStreamDecodeWorker::DecodeStream()
 {
 	bGotFrameThisConnection = false;
+	Tracks = FIPStreamTrackList();
 	ConnectStartSeconds = FPlatformTime::Seconds();
 
 	if (!Session.Open(Url))
@@ -154,7 +171,8 @@ void FIPStreamDecodeWorker::DecodeStream()
 
 				// Queued after HandOffFrame() so the first sample is already waiting when the event is processed.
 				// TracksChanged queued first so the facade has selected the track before MediaOpened reaches blueprints.
-				PendingEvents.Enqueue({ EMediaEvent::TracksChanged, MakeVideoFormat(Info, Session.GetCodecName()) });
+				Tracks.Video = MakeVideoFormat(Info, Session.GetCodecName());
+				PendingEvents.Enqueue({ EMediaEvent::TracksChanged, Tracks });
 				PendingEvents.Enqueue({ bEverGotFrame ? EMediaEvent::PlaybackResumed : EMediaEvent::MediaOpened, {} });
 
 				UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeStream(): First frame on connection %d, %.3f ms after connecting began (%llu frames decoded so far). Decoder: %s"), ConnectionIndex, (FPlatformTime::Seconds() - ConnectStartSeconds) * 1000.0, FramesDecoded, *Session.GetDecoderDelayInfo());
@@ -162,6 +180,20 @@ void FIPStreamDecodeWorker::DecodeStream()
 			else if (FramesDecoded % FramesPerProgressLog == 0)
 			{
 				UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeStream(): %llu frames decoded so far. Decoder: %s"), FramesDecoded, *Session.GetDecoderDelayInfo());
+			}
+			continue;
+		}
+		if (DecodeResult == EIPStreamDecodeResult::GotAudio)
+		{
+			FIPStreamAudioInfo AudioInfo;
+			if (HandOffAudio(AudioInfo) && !Tracks.Audio.IsSet())
+			{
+				// First audio of this connection: send the whole list again now with audio in it.
+				Tracks.Audio = MakeAudioFormat(AudioInfo, Session.GetAudioCodecName());
+				PendingEvents.Enqueue({ EMediaEvent::TracksChanged, Tracks });
+
+				UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeStream(): First audio on connection %d: %s, %d channels, %d Hz, %.3f ms after connecting began."), ConnectionIndex, *Session.GetAudioCodecName(), AudioInfo.Channels, AudioInfo.SampleRate, (FPlatformTime::Seconds() - ConnectStartSeconds) * 1000.0);
+
 			}
 			continue;
 		}
@@ -173,18 +205,18 @@ void FIPStreamDecodeWorker::DecodeStream()
 		// StreamEnded, Error
 		if (DecodeResult == EIPStreamDecodeResult::StreamEnded)
 		{
-			UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeNext(): stream ended. -_-"));
+			UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeNext(): stream ended."));
 		}
 		else if (DecodeResult == EIPStreamDecodeResult::Error)
 		{
-			UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: DecodeNext(): connection failed. -_-"));
+			UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: DecodeNext(): connection failed."));
 		}
 		// This is not necessary as this only happens when a stop is requested,
 		// but I'm adding it just because I would like to have every path logged
 		// due to my bad experiences with UE media players and their unexpected behaviours. 
 		else if (DecodeResult == EIPStreamDecodeResult::Aborted)
 		{
-			UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeNext(): connection closed. ^_^"));
+			UE_LOG(LogIPStreamMedia, Display, TEXT("DecodeWorker: DecodeNext(): connection closed."));
 		}
 		
 
@@ -198,7 +230,7 @@ void FIPStreamDecodeWorker::WaitBeforeReconnect()
 		FirstBackoffSeconds * FMath::Pow(2.0, static_cast<double>(ConsecutiveFailures)),
 		MaxBackoffSeconds);
 
-	UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: Trying to reconnect after %d seconds... ~_~"), static_cast<int32>(DelaySeconds));
+	UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: Trying to reconnect after %d seconds..."), static_cast<int32>(DelaySeconds));
 	BackoffEvent->Wait(FTimespan::FromSeconds(DelaySeconds));
 }
 
@@ -259,5 +291,51 @@ void FIPStreamDecodeWorker::SkipFrame(const TCHAR* Reason)
 	if (FramesSkipped == 1 || FramesSkipped % SkippedFramesPerLog == 0)
 	{
 		UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: %s() failed, frame skipped (%llu skipped so far). -_-"), Reason, FramesSkipped);
+	}
+}
+
+bool FIPStreamDecodeWorker::HandOffAudio(FIPStreamAudioInfo& OutInfo)
+{
+	// Block's metadata
+	if (!Session.GetAudioInfo(OutInfo))
+	{
+		DropAudio(TEXT("GetAudioInfo() failed"));
+		return false;
+	}
+
+	// get an empty sample from the pool
+	const TSharedRef<FIPStreamAudioSample, ESPMode::ThreadSafe> Sample = AudioSamplePool.AcquireShared();
+
+	// Same lap number as video
+	const FMediaTimeStamp Time(OutInfo.Time, FMediaTimeStamp::MakeSequenceIndex(0, ConnectionIndex));
+
+	if (!Sample->Initialize(OutInfo.Channels, OutInfo.SampleRate, OutInfo.Frames, Time))
+	{
+		DropAudio(TEXT("Initialize() failed"));
+		return false;
+	}
+
+	const int32 Written = Session.ConvertAudioToFloat(Sample->GetMutableBuffer(), OutInfo.Frames);
+	if (!Sample->Finish(Written))
+	{
+		DropAudio(TEXT("ConvertAudioToFloat() failed"));
+		return false;
+	}
+
+	if (!OnAudioReady(Sample))
+	{
+		DropAudio(TEXT("audio sample queue full!"));
+	}
+
+	return true;
+}
+
+void FIPStreamDecodeWorker::DropAudio(const TCHAR* Reason)
+{
+	++AudioBlocksDropped;
+
+	if (AudioBlocksDropped == 1 || AudioBlocksDropped % AudioBlocksPerLog == 0)
+	{
+		UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeWorker: audio block dropped: %s (%llu dropped so far)."), Reason, AudioBlocksDropped);
 	}
 }

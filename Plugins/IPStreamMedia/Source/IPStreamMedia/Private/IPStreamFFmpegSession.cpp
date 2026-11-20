@@ -16,7 +16,9 @@ extern "C"
 #include "libavutil/avutil.h"
 #include "libavutil/dict.h"
 #include "libavutil/mathematics.h"
+#include "libavutil/samplefmt.h"
 #include "libswscale/swscale.h"
+#include "libswresample/swresample.h"
 }
 
 namespace
@@ -42,6 +44,14 @@ namespace
 
 	// How many frames of each connection get a FrameInfo log line.
 	constexpr int32 FramesToLog = 5;	
+
+	// How many audio frames of each connection to get an AudioInfo log line
+	constexpr int32 AudioFramesToLog = 5;
+
+	// How many drops get a warning each, before we switch to one warning every AudioDropsPerLog
+	constexpr uint64 AudioDropsWarnedInFull = 3;
+	// After the first AudioDropsWarnedInFull warnings, how many audio drops before logging a warning
+	constexpr uint64 AudioDropsPerLog = 100;
 
 }
 
@@ -72,7 +82,7 @@ bool FIPStreamFFmpegSession::Open(const FString& Url)
 	FormatContext = avformat_alloc_context();
 	if (!FormatContext)
 	{
-		UE_LOG(LogIPStreamMedia, Error, TEXT("Open: avformat_alloc_context() failed. Failed to create new FormatContext. -_-"));
+		UE_LOG(LogIPStreamMedia, Error, TEXT("Open: avformat_alloc_context() failed. Failed to create new FormatContext."));
 		return false;
 	}
 
@@ -82,7 +92,8 @@ bool FIPStreamFFmpegSession::Open(const FString& Url)
 
 	// Setup the dictionary
 	AVDictionary* Options = nullptr;
-	av_dict_set(&Options, "rtsp_transport", "tcp", 0);
+	av_dict_set(&Options, "rtsp_transport", "tcp+udp", 0);	// Accepts both TCP and UDP
+	av_dict_set(&Options, "rtsp_flags", "prefer_tcp", 0);	// But we prefer TCP because UDP can lose packets
 	av_dict_set(&Options, "probesize", "32768", 0);
 
 	// Setting the interrupt deadline for opening a new connection - Very Important
@@ -102,7 +113,7 @@ bool FIPStreamFFmpegSession::Open(const FString& Url)
 		}
 		else
 		{
-			UE_LOG(LogIPStreamMedia, Error, TEXT("Open: avformat_open_input() failed (ReturnCode = %d). Failed to open connection to the stream. -_-"), OpenResult);
+			UE_LOG(LogIPStreamMedia, Error, TEXT("Open: avformat_open_input() failed (ReturnCode = %d). Failed to open connection to the stream."), OpenResult);
 		}
 		Close();
 		return false;
@@ -118,7 +129,7 @@ bool FIPStreamFFmpegSession::Open(const FString& Url)
 		}
 		else
 		{
-			UE_LOG(LogIPStreamMedia, Error, TEXT("Open: avformat_find_stream_info() failed (ReturnCode = %d). Failed to find stream info. -_-"), StreamInfoResult);
+			UE_LOG(LogIPStreamMedia, Error, TEXT("Open: avformat_find_stream_info() failed (ReturnCode = %d). Failed to find stream info."), StreamInfoResult);
 		}
 		Close();
 		return false;
@@ -138,7 +149,7 @@ bool FIPStreamFFmpegSession::Open(const FString& Url)
 
 	if (VideoStreamIndex == INDEX_NONE)
 	{
-		UE_LOG(LogIPStreamMedia, Error, TEXT("Open: No video stream found in the connection. -_-"));
+		UE_LOG(LogIPStreamMedia, Error, TEXT("Open: No video stream found in the connection."));
 		Close();
 		return false;
 	}
@@ -150,7 +161,7 @@ bool FIPStreamFFmpegSession::Open(const FString& Url)
 	const AVCodec* Decoder = avcodec_find_decoder(CodecParams->codec_id);
 	if (!Decoder)
 	{
-		UE_LOG(LogIPStreamMedia, Error, TEXT("Open: No decoder for codec id: %d. -_-"), CodecParams->codec_id);
+		UE_LOG(LogIPStreamMedia, Error, TEXT("Open: No decoder for codec id: %d."), CodecParams->codec_id);
 		Close();
 		return false;
 	}
@@ -160,7 +171,7 @@ bool FIPStreamFFmpegSession::Open(const FString& Url)
 	// Check if CodecContext is valid and fill it up with the CodecParams
 	if (!CodecContext || avcodec_parameters_to_context(CodecContext, CodecParams) < 0)
 	{
-		UE_LOG(LogIPStreamMedia, Error, TEXT("Open: Failed to build codec context. -_-"));
+		UE_LOG(LogIPStreamMedia, Error, TEXT("Open: Failed to build codec context."));
 		Close();
 		return false;
 	}
@@ -186,7 +197,7 @@ bool FIPStreamFFmpegSession::Open(const FString& Url)
 	// Setup the decoder in memory
 	if (avcodec_open2(CodecContext, Decoder, nullptr) < 0)
 	{
-		UE_LOG(LogIPStreamMedia, Error, TEXT("Open: avcodec_open2() failed. Failed to setup the decoder. -_-"));
+		UE_LOG(LogIPStreamMedia, Error, TEXT("Open: avcodec_open2() failed. Failed to setup the decoder."));
 		Close();
 		return false;
 	}
@@ -199,10 +210,15 @@ bool FIPStreamFFmpegSession::Open(const FString& Url)
 
 	if (!Packet || !Frame)
 	{
-		UE_LOG(LogIPStreamMedia, Error, TEXT("Open: Packet/Frame allocation has failed. -_-"));
+		UE_LOG(LogIPStreamMedia, Error, TEXT("Open: Packet/Frame allocation has failed."));
 		Close();
 		return false;
 	}
+
+	// Audio is optional
+	OpenAudioDecoder();
+
+	OpenedSeconds = FPlatformTime::Seconds();
 
 	// If we have reached here then everything went well,
 	return true;
@@ -216,7 +232,7 @@ EIPStreamDecodeResult FIPStreamFFmpegSession::DecodeNext()
 		return EIPStreamDecodeResult::Error;
 	}
 
-	// Does the decoder have a frame for us ?
+	// Does the video decoder have a frame for us ?
 	int ReceiveResult = 0;
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(IPStream_Receive);
@@ -237,6 +253,21 @@ EIPStreamDecodeResult FIPStreamFFmpegSession::DecodeNext()
 	{
 		UE_LOG(LogIPStreamMedia, Error, TEXT("DecodeNext: avcodec_receive_frame() has failed. ReturnCode = %d."), ReceiveResult);
 		return EIPStreamDecodeResult::Error;
+	}
+
+	// Does the audio decoder have a frame for us ?
+	if (AudioCodecContext)
+	{
+		const int AudioReceiveResult = avcodec_receive_frame(AudioCodecContext, AudioFrame);
+
+		if (AudioReceiveResult == 0)
+		{
+			return EIPStreamDecodeResult::GotAudio;
+		}
+		if (AudioReceiveResult != AVERROR(EAGAIN) && AudioReceiveResult != AVERROR_EOF)
+		{
+			DropAudioPacket(TEXT("avcodec_receive_frame"), AudioReceiveResult);
+		}
 	}
 	
 	// Now that decoder is empty, read a new AVPacket
@@ -261,8 +292,25 @@ EIPStreamDecodeResult FIPStreamFFmpegSession::DecodeNext()
 	}
 	if (ReadResult < 0)
 	{
-		UE_LOG(LogIPStreamMedia, Error, TEXT("DecodeNext: av_read_frame() failed to read a new AVPacket. ReturnCode = %d. -_-"), ReadResult);
+		UE_LOG(LogIPStreamMedia, Error, TEXT("DecodeNext: av_read_frame() failed to read a new AVPacket. ReturnCode = %d."), ReadResult);
 		return EIPStreamDecodeResult::Error;
+	}
+
+	if (av_packet_get_side_data(Packet, AV_PKT_DATA_RTCP_SR, nullptr) != nullptr)
+	{
+		NoteSenderReport(Packet->stream_index);
+	}
+
+	// Send audio packet to audio decoder
+	if (AudioCodecContext && Packet->stream_index == AudioStreamIndex)
+	{
+		const int AudioSendResult = avcodec_send_packet(AudioCodecContext, Packet);
+		av_packet_unref(Packet);
+		if (AudioSendResult < 0)
+		{
+			DropAudioPacket(TEXT("avcodec_send_packet"), AudioSendResult);
+		}
+		return EIPStreamDecodeResult::NoFrameYet;
 	}
 
 	// Ignore and wipe Packet unless it contains video stream packets
@@ -301,7 +349,7 @@ EIPStreamDecodeResult FIPStreamFFmpegSession::DecodeNext()
 		*/ 
 
 		// AVERROR(EAGAIN) should return code '-11'
-		UE_LOG(LogIPStreamMedia, Error, TEXT("DecodeNext: avcodec_send_packet() has failed. ReturnCode = %d. -_-"), SendResult);
+		UE_LOG(LogIPStreamMedia, Error, TEXT("DecodeNext: avcodec_send_packet() has failed. ReturnCode = %d."), SendResult);
 		return EIPStreamDecodeResult::Error;
 	}
 
@@ -314,6 +362,12 @@ void FIPStreamFFmpegSession::Close()
 {
 	// Reverse order of allocation.
 	// These functions also ensure that the variable is nullptr
+
+	swr_free(&ResampleContext);
+	av_channel_layout_uninit(&ResampleInLayout);
+
+	av_frame_free(&AudioFrame);
+	avcodec_free_context(&AudioCodecContext);
 
 	sws_freeContext(ScaleContext);
 	ScaleContext = nullptr;
@@ -331,6 +385,21 @@ void FIPStreamFFmpegSession::Close()
 	LastTime = FTimespan::Zero();
 	LastDuration = FTimespan::Zero();
 	FramesLogged = 0;
+
+	AudioStreamIndex = INDEX_NONE;
+	AudioTimebaseNum = 0;
+	AudioTimebaseDen = 0;
+	bHaveLastAudio = false;
+	AudioLastTime = FTimespan::Zero();
+	AudioLastDuration = FTimespan::Zero();
+	AudioFramesLogged = 0;
+	ResampleInFormat = -1;
+	ResampleInRate = 0;
+
+	bVideoSenderReportLogged = false;
+	bAudioSenderReportLogged = false;
+	OpenedSeconds = 0.0;
+
 	DeadlineSeconds = 0.0;
 
 	// DO NOT RESET bStopRequested HERE!
@@ -342,9 +411,19 @@ bool FIPStreamFFmpegSession::IsOpen() const
 	return FormatContext != nullptr;
 }
 
+bool FIPStreamFFmpegSession::HasAudio() const
+{
+	return AudioCodecContext != nullptr;
+}
+
 FString FIPStreamFFmpegSession::GetCodecName() const
 {
 	return CodecContext ? FString(UTF8_TO_TCHAR(avcodec_get_name(CodecContext->codec_id))) : FString();
+}
+
+FString FIPStreamFFmpegSession::GetAudioCodecName() const
+{
+	return AudioCodecContext ? FString(UTF8_TO_TCHAR(avcodec_get_name(AudioCodecContext->codec_id))) : FString();
 }
 
 FString FIPStreamFFmpegSession::GetDecoderDelayInfo()
@@ -483,6 +562,102 @@ bool FIPStreamFFmpegSession::ConvertFrameToBGRA(uint8* Dst, int32 DstStride)
 	return OutputHeight == Frame->height;
 }
 
+bool FIPStreamFFmpegSession::GetAudioInfo(FIPStreamAudioInfo& OutInfo)
+{
+	if (!AudioFrame || AudioFrame->nb_samples <= 0 || AudioFrame->sample_rate <= 0 || AudioFrame->ch_layout.nb_channels <= 0)
+	{
+		return false;
+	}
+
+	const bool bTimebaseKnown = AudioTimebaseNum > 0 && AudioTimebaseDen > 0;
+	const AVRational Timebase{ AudioTimebaseNum, AudioTimebaseDen };
+
+	int64 Pts = AudioFrame->pts;
+	if (Pts == AV_NOPTS_VALUE)
+	{
+		Pts = AudioFrame->best_effort_timestamp;
+	}
+
+	FTimespan Time = FTimespan::Zero();
+	if (Pts != AV_NOPTS_VALUE && bTimebaseKnown)
+	{
+		Time = FTimespan(av_rescale_q(Pts, Timebase, UnrealTicks));
+	}
+	else if (bHaveLastAudio)
+	{
+		Time = AudioLastTime + AudioLastDuration;
+	}
+
+	// This frame's length, based on its own values
+	const FTimespan Duration(static_cast<int64>(AudioFrame->nb_samples) * ETimespan::TicksPerSecond / AudioFrame->sample_rate);
+
+	if (AudioFramesLogged < AudioFramesToLog)
+	{
+		++AudioFramesLogged;
+		UE_LOG(LogIPStreamMedia, Display, TEXT("AudioInfo %d: pts = %lld time_base = %d / %d -> Time = %lld ticks, nb_samples = %d, rate = %d, channels = %d, format = %s."),
+			AudioFramesLogged, AudioFrame->pts, AudioTimebaseNum, AudioTimebaseDen, Time.GetTicks(), AudioFrame->nb_samples,
+			AudioFrame->sample_rate, AudioFrame->ch_layout.nb_channels,
+			UTF8_TO_TCHAR(av_get_sample_fmt_name(static_cast<AVSampleFormat>(AudioFrame->format))));
+	}
+
+	AudioLastTime = Time;
+	AudioLastDuration = Duration;
+	bHaveLastAudio = true;
+
+	OutInfo.Channels = AudioFrame->ch_layout.nb_channels;
+	OutInfo.Frames = AudioFrame->nb_samples;
+	OutInfo.SampleRate = AudioFrame->sample_rate;
+	OutInfo.Time = Time;
+
+	return true;
+}
+
+int32 FIPStreamFFmpegSession::ConvertAudioToFloat(float* Dst, int32 MaxFrames)
+{
+	if (!AudioFrame || !Dst || MaxFrames <= 0 || AudioFrame->nb_samples <= 0)
+	{
+		return 0;
+	}
+
+	// swsresample does not have a cached context helper as sws_getCachedContext, so we compare by hand:
+	// rebuild if input's format, rate or channel layout differs from before
+	const bool bSetupMatches = ResampleContext
+		&& AudioFrame->format == ResampleInFormat
+		&& AudioFrame->sample_rate == ResampleInRate
+		&& av_channel_layout_compare(&AudioFrame->ch_layout, &ResampleInLayout) == 0;
+
+	if (!bSetupMatches)
+	{
+		swr_free(&ResampleContext);
+		av_channel_layout_uninit(&ResampleInLayout);
+
+		const AVSampleFormat InFormat = static_cast<AVSampleFormat>(AudioFrame->format);
+		if (swr_alloc_set_opts2(&ResampleContext,
+			&AudioFrame->ch_layout, AV_SAMPLE_FMT_FLT ,AudioFrame->sample_rate, 
+			&AudioFrame->ch_layout, InFormat, AudioFrame->sample_rate, 0, nullptr) < 0
+			|| swr_init(ResampleContext) < 0)
+		{
+			swr_free(&ResampleContext);
+			UE_LOG(LogIPStreamMedia, Error, TEXT("ConvertAudioToFloat: swresample setup failed."));
+			return -1;
+		}
+
+		av_channel_layout_copy(&ResampleInLayout, &AudioFrame->ch_layout);
+		ResampleInFormat = AudioFrame->format;
+		ResampleInRate = AudioFrame->sample_rate;
+
+		UE_LOG(LogIPStreamMedia, Display, TEXT("ConvertAudioToFloat: converter built: %d channels, %d Hz, %s -> flt."),
+			AudioFrame->ch_layout.nb_channels, AudioFrame->sample_rate, UTF8_TO_TCHAR(av_get_sample_fmt_name(InFormat)));
+	}
+
+	// Using extended_data because planar audio with > 8 channels must use extended_data
+	uint8_t* OutPlanes[1] = { reinterpret_cast<uint8_t*>(Dst) };
+	const int Written = swr_convert(ResampleContext, OutPlanes, MaxFrames, AudioFrame->extended_data, AudioFrame->nb_samples);
+
+	// Frames written per channel
+	return static_cast<int32>(Written);
+}
+
 //~ Thread boundary
 
 void FIPStreamFFmpegSession::RequestStop()
@@ -518,6 +693,93 @@ int FIPStreamFFmpegSession::InterruptCallback(void* Opaque)
 void FIPStreamFFmpegSession::SetDeadline(double TimeoutSeconds)
 {
 	DeadlineSeconds = FPlatformTime::Seconds() + TimeoutSeconds;
+}
+
+void FIPStreamFFmpegSession::OpenAudioDecoder()
+{
+	for (uint32 i = 0; i < FormatContext->nb_streams; i++)
+	{
+		if (FormatContext->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+		{
+			AudioStreamIndex = static_cast<int32>(i);
+			break;
+		}
+	}
+
+	if (AudioStreamIndex == INDEX_NONE)
+	{
+		UE_LOG(LogIPStreamMedia, Display, TEXT("Open: No audio stream in the connection, video only."));
+		return;
+	}
+
+	const AVStream* AudioStream = FormatContext->streams[AudioStreamIndex];
+	const AVCodecParameters* AudioParams = AudioStream->codecpar;
+	const AVCodec* AudioDecoder = avcodec_find_decoder(AudioParams->codec_id);
+
+	AudioCodecContext = AudioDecoder ? avcodec_alloc_context3(AudioDecoder) : nullptr;
+	bool bOk = AudioCodecContext && avcodec_parameters_to_context(AudioCodecContext, AudioParams) >= 0;
+
+	if (bOk)
+	{
+		AudioCodecContext->pkt_timebase = AudioStream->time_base;
+		bOk = avcodec_open2(AudioCodecContext, AudioDecoder, nullptr) >= 0;
+	}
+	if (bOk)
+	{
+		AudioFrame = av_frame_alloc();
+		bOk = AudioFrame != nullptr;
+	}
+
+	if (!bOk)
+	{
+		UE_LOG(LogIPStreamMedia, Warning, TEXT("Open: Audio stream %d (codec id %d) could not be opened, video only."), AudioStreamIndex, AudioParams->codec_id);
+		av_frame_free(&AudioFrame);
+		avcodec_free_context(&AudioCodecContext);
+		AudioStreamIndex = INDEX_NONE;
+		return;
+	}
+
+	AudioTimebaseNum = AudioStream->time_base.num;
+	AudioTimebaseDen = AudioStream->time_base.den;
+
+	UE_LOG(LogIPStreamMedia, Display, TEXT("Open: Audio stream %d opened: %s."), AudioStreamIndex, *GetAudioCodecName());
+}
+
+void FIPStreamFFmpegSession::NoteSenderReport(int32 StreamIndex)
+{
+	bool* bLogged = nullptr;
+	const TCHAR* Kind = nullptr;
+
+	if (StreamIndex == VideoStreamIndex)
+	{
+		bLogged = &bVideoSenderReportLogged;
+		Kind = TEXT("video");
+	}
+	else if (StreamIndex == AudioStreamIndex)
+	{
+		bLogged = &bAudioSenderReportLogged;
+		Kind = TEXT("audio");
+	}
+
+	if (!bLogged || *bLogged)
+	{
+		return;
+	}
+	*bLogged = true;
+
+	UE_LOG(LogIPStreamMedia, Display, TEXT("RTCP: first sender report on the %s stream (%d), %.3f s after Open."),
+		Kind, StreamIndex, FPlatformTime::Seconds() - OpenedSeconds);
+}
+
+void FIPStreamFFmpegSession::DropAudioPacket(const TCHAR* Where, int ReturnCode)
+{
+	++AudioPacketsDropped;
+
+	if (AudioPacketsDropped <= AudioDropsWarnedInFull || AudioPacketsDropped % AudioDropsPerLog == 0)
+	{
+		UE_LOG(LogIPStreamMedia, Warning, TEXT("DecodeNext: audio %s() failed (ReturnCode = %d), packet dropped (%llu dropped so far). -_-"),
+			Where, ReturnCode, AudioPacketsDropped);
+	}
 }
 
 
